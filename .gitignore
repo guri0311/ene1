@@ -1,0 +1,6 @@
+# arduino-cli / IDE のビルド出力
+build/
+*.hex
+*.elf
+*.bin
+.vscode/
