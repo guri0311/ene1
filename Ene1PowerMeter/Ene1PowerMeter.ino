@@ -6,12 +6,12 @@
  *   記録       : microSD (SPI, CS = D10)
  *
  * ボタン (D2 - GND)
- *   1 秒長押し : 積算 (mAh・Wh)・経過時間を 0 にして新しいログファイルを作る
+ *   1 秒長押し : 積算 mAh・経過時間を 0 にして新しいログファイルを作る
  *   短く押す   : SD が NO SD のときだけ、SD の再初期化を試す (積算はそのまま)
  *
  * レース中の故障に備えた動作
  *   - Nano だけがリセットされた場合 (ウォッチドッグ・書き込み・リセットボタン等)、
- *     INA228 の設定が残っていれば積算 (mAh・Wh) を消さずに続きから再開する (経過時間も可能なら復元)
+ *     INA228 の設定が残っていれば積算 mAh を消さずに続きから再開する (経過時間も可能なら復元)
  *   - 走行中に INA228 の設定が消えた (電源瞬断など) ことを検出したら、再設定して
  *     それまでの積算値を引き継ぐ
  *   - LCD をノイズで化けたままにしないよう、5 秒ごとに初期化コマンドを再送する
@@ -89,7 +89,6 @@ enum : uint8_t {
   REG_VBUS       = 0x05,  // 24bit (上位 20bit)
   REG_CURRENT    = 0x07,  // 24bit (上位 20bit, 符号付き)
   REG_POWER      = 0x08,  // 24bit (符号なし)
-  REG_ENERGY     = 0x09,  // 40bit (符号なし)
   REG_CHARGE     = 0x0A,  // 40bit (符号付き)
   REG_MFG_ID     = 0x3E,  // 16bit = 0x5449 ("TI")
 };
@@ -112,7 +111,6 @@ constexpr uint16_t SHUNT_CAL = (uint16_t)(SHUNT_CAL_F + 0.5f);
 constexpr float CURRENT_LSB   = (float)SHUNT_CAL / (13107.2e6f * R_SHUNT_OHM);
 constexpr float VBUS_LSB_V    = 195.3125e-6f;                         // バス電圧 LSB
 constexpr float POWER_LSB_W   = 3.2f * CURRENT_LSB;                    // 電力 LSB
-constexpr float ENERGY_LSB_WH = 16.0f * 3.2f * CURRENT_LSB / 3600.0f;  // 積算 LSB [J]→[Wh]
 constexpr float CHARGE_LSB_MAH = CURRENT_LSB / 3.6f;                   // 電荷 LSB [C]→[mAh]
 
 // ============================================================================
@@ -125,16 +123,14 @@ struct Measurement {
   float voltage;   // [V]
   float current;   // [A]
   float power;     // [W]
-  float energyWh;  // [Wh]  = ENERGY レジスタ + energyOffsetWh
   float chargemAh; // [mAh] = CHARGE レジスタ + chargeOffsetmAh (回生は差し引かれる)
   bool  ok;        // 直近の読み出しが成功したか
 };
-Measurement meas = {0, 0, 0, 0, 0, false};
+Measurement meas = {0, 0, 0, 0, false};
 bool haveMeas = false;            // 起動後に一度でも正しく読めたか
 
 // INA228 が走行中に設定を失った (電源瞬断など) ときに、それまでの積算を引き継ぐための値。
-// 積算そのものは INA228 の ENERGY レジスタだけで行い、ソフトでは足し込まない
-float    energyOffsetWh  = 0;
+// 積算そのものは INA228 の CHARGE レジスタだけで行い、ソフトでは足し込まない
 float    chargeOffsetmAh = 0;
 uint8_t  inaRecoverCount = 0;      // INA228 を再設定した回数 (LCD 3 行目に表示)
 
@@ -155,7 +151,6 @@ bool     btnHandled      = false;
 struct Persist {
   uint32_t magic;
   uint32_t elapsedMs;
-  float    energyOffsetWh;
   float    chargeOffsetmAh;
   uint32_t check;
 };
@@ -295,7 +290,7 @@ uint8_t inaCheckConfig() {  // 戻り値は上の INA_* のどれか
   return same ? INA_CONFIGURED : INA_NOT_CONFIGURED;
 }
 
-// 全レジスタを初期化してから設定する (ENERGY も 0 になる)
+// 全レジスタを初期化してから設定する (CHARGE も 0 になる)
 bool inaConfigure() {
   if (!inaWrite16(REG_CONFIG, CONFIG_RST)) return false;
   delay(2);
@@ -305,17 +300,14 @@ bool inaConfigure() {
   return inaCheckConfig() == INA_CONFIGURED;  // 書けたか読み戻して確認
 }
 
-bool inaResetEnergy() {
+bool inaResetCharge() {
   return inaWrite16(REG_CONFIG, CONFIG_VALUE | CONFIG_RSTACC);
 }
 
 // 走行中に INA228 の設定が消えていたら、それまでの積算を引き継いで再設定する
 void inaRecover() {
   // 最後に正しく読めた積算値を引き継ぐ (起動後まだ読めていなければ今のオフセットのまま)
-  if (haveMeas) {
-    energyOffsetWh = meas.energyWh;
-    chargeOffsetmAh = meas.chargemAh;
-  }
+  if (haveMeas) chargeOffsetmAh = meas.chargemAh;
   bool ok = inaConfigure();
   if (inaRecoverCount < 9) inaRecoverCount++;
 #if SERIAL_DEBUG
@@ -326,12 +318,12 @@ void inaRecover() {
 #endif
 }
 
-// 電圧・電流・電力・積算をまとめて読む。
+// 電圧・電流・電力・積算 mAh をまとめて読む。
 // 読み出しの前後で SHUNT_CAL を確かめ、途中で INA228 がリセットされた値は採用しない
 bool inaMeasure(Measurement &m) {
   uint16_t cal;
   uint32_t rv, ri, rp;
-  uint8_t e[5], q[5];
+  uint8_t q[5];
 
   if (!inaRead16(REG_SHUNT_CAL, cal)) return m.ok = false;
   if (cal != SHUNT_CAL) {           // 設定が消えている (電源瞬断など)
@@ -339,16 +331,13 @@ bool inaMeasure(Measurement &m) {
     return m.ok = false;            // 今回は値を使わない (次回から正常に読める)
   }
   if (!inaRead24(REG_VBUS, rv) || !inaRead24(REG_CURRENT, ri) ||
-      !inaRead24(REG_POWER, rp) || !inaRead(REG_ENERGY, e, 5) || !inaRead(REG_CHARGE, q, 5))
+      !inaRead24(REG_POWER, rp) || !inaRead(REG_CHARGE, q, 5))
     return m.ok = false;
   if (!inaRead16(REG_SHUNT_CAL, cal) || cal != SHUNT_CAL) return m.ok = false;
 
   m.voltage = toSigned20(rv) * VBUS_LSB_V;
   m.current = toSigned20(ri) * CURRENT_LSB;
   m.power   = rp * POWER_LSB_W;     // 24bit 全部が値 (符号なし)
-  uint32_t lo = ((uint32_t)e[1] << 24) | ((uint32_t)e[2] << 16) |
-                ((uint32_t)e[3] << 8) | e[4];        // 40bit 符号なし
-  m.energyWh = ((float)e[0] * 4294967296.0f + (float)lo) * ENERGY_LSB_WH + energyOffsetWh;
   // CHARGE は 40bit の 2 の補数。float で上位と下位を足すと負の値で桁落ちするので、
   // 64bit 整数で組み立ててから float にする
   int64_t qraw = ((int64_t)(int8_t)q[0] << 32) | ((uint32_t)q[1] << 24) |
@@ -362,16 +351,14 @@ bool inaMeasure(Measurement &m) {
 //  リセットされても消えない値 (経過時間・積算オフセット)
 // ============================================================================
 uint32_t persistCheckValue(const Persist &p) {
-  uint32_t off, qoff;
-  memcpy(&off, &p.energyOffsetWh, sizeof(off));
+  uint32_t qoff;
   memcpy(&qoff, &p.chargeOffsetmAh, sizeof(qoff));
-  return p.magic ^ p.elapsedMs ^ off ^ (qoff * 3) ^ 0x5A5AA5A5UL;
+  return p.magic ^ p.elapsedMs ^ qoff ^ 0x5A5AA5A5UL;
 }
 
 void persistSave(uint32_t now) {
   persist.magic = PERSIST_MAGIC;
   persist.elapsedMs = now - timerStartMs;
-  persist.energyOffsetWh = energyOffsetWh;
   persist.chargeOffsetmAh = chargeOffsetmAh;
   persist.check = persistCheckValue(persist);
 }
@@ -434,7 +421,7 @@ bool openNewLog() {
     logFile = SD.open(name, FILE_WRITE);
     if (!logFile) return false;
     nextLogIndex++;
-    logFile.println(F("time_s,voltage_V,current_A,power_W,energy_Wh,charge_mAh"));
+    logFile.println(F("time_s,voltage_V,current_A,power_W,charge_mAh"));
     logFile.flush();
     if (logFile.getWriteError()) {
       logFile.close();
@@ -460,7 +447,7 @@ void startSdLog() {
 #endif
 }
 
-// 1 行出力: 経過時間[s], 電圧[V], 電流[A], 電力[W], 積算[Wh], 積算[mAh]
+// 1 行出力: 経過時間[s], 電圧[V], 電流[A], 電力[W], 積算[mAh]
 void printCsvRow(Print &out, uint32_t elapsedMs) {
   char buf[16];
   snprintf_P(buf, sizeof(buf), PSTR("%lu.%u,"), elapsedMs / 1000,
@@ -469,7 +456,6 @@ void printCsvRow(Print &out, uint32_t elapsedMs) {
   out.print(dtostrf(meas.voltage, 1, 3, buf));  out.print(',');
   out.print(dtostrf(meas.current, 1, 3, buf));  out.print(',');
   out.print(dtostrf(meas.power, 1, 2, buf));    out.print(',');
-  out.print(dtostrf(meas.energyWh, 1, 4, buf));  out.print(',');
   out.println(dtostrf(meas.chargemAh, 1, 1, buf));
 }
 
@@ -498,21 +484,19 @@ void restartTimer(uint32_t elapsedMs) {
   nextLcdMs = now;
 }
 
-// 長押し: 積算 (mAh・Wh)・経過時間を 0 にして新しいログ
-void doEnergyReset() {
-  bool ok = inaResetEnergy();
-  energyOffsetWh = 0;
+// 長押し: 積算 mAh・経過時間を 0 にして新しいログ
+void doCounterReset() {
+  bool ok = inaResetCharge();
   chargeOffsetmAh = 0;
   inaRecoverCount = 0;
-  meas.energyWh = 0;
   meas.chargemAh = 0;
-  lcdLineP(0, ok ? F("RESET mAh & Wh") : F("RESET FAILED"));
+  lcdLineP(0, ok ? F("RESET mAh") : F("RESET FAILED"));
   lcdLineP(1, F(""));
   lcdLineP(2, F(""));
   lcdLineP(3, F("SD ..."));
   startSdLog();  // 新しいログファイル (SD が無かった場合はここで再初期化を試す)
 #if SERIAL_DEBUG
-  Serial.println(F("# energy reset"));
+  Serial.println(F("# mAh reset"));
 #endif
   delay(800);    // メッセージ表示
   restartTimer(0);
@@ -534,7 +518,7 @@ void handleButton(uint32_t now) {
       btnDownMs = now;
     } else if (!btnHandled && now - btnDownMs >= RESET_HOLD_MS) {
       btnHandled = true;     // 離すまで再実行しない
-      doEnergyReset();
+      doCounterReset();
     }
     return;
   }
@@ -595,13 +579,12 @@ void setup() {
   }
 
   // INA228 の設定が残っている = INA228 は電源が切れておらず Nano だけがリセットされた。
-  // このときは積算 (mAh・Wh) を消さずに続きから再開する
+  // このときは積算 mAh を消さずに続きから再開する
   uint32_t resumeElapsedMs = 0;
   bool resumed = (inaCheckConfig() == INA_CONFIGURED);
   if (resumed) {
     if (persistValid()) {
       resumeElapsedMs = persist.elapsedMs;
-      energyOffsetWh = persist.energyOffsetWh;
       chargeOffsetmAh = persist.chargeOffsetmAh;
     }
     lcdLineP(1, F("RESUMED (mAh KEPT)"));
@@ -618,7 +601,7 @@ void setup() {
   }
 #if SERIAL_DEBUG
   Serial.print(F("INA228: "));
-  Serial.println(resumed ? F("resumed (energy kept)") : F("configured"));
+  Serial.println(resumed ? F("resumed (mAh kept)") : F("configured"));
   Serial.print(F("SHUNT_CAL=")); Serial.println(SHUNT_CAL);
 #endif
 
@@ -626,7 +609,7 @@ void setup() {
   lcdLineP(2, sdOk ? F("SD OK") : F("NO SD"));
   if (sdOk) lcdLine(3, logName);
 #if SERIAL_DEBUG
-  Serial.println(F("time_s,voltage_V,current_A,power_W,energy_Wh,charge_mAh"));
+  Serial.println(F("time_s,voltage_V,current_A,power_W,charge_mAh"));
 #endif
   delay(1500);
 
