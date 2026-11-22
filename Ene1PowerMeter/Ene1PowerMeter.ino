@@ -6,10 +6,10 @@
  *   記録       : microSD (SPI, CS = D10)
  *
  * ボタン (D2 - GND)
- *   1 秒以上押して離す : 積算 mAh・経過時間を 0 にして新しいログファイルを作る
+ *   3 秒以上押して離す : 積算 mAh・経過時間を 0 にして新しいログファイルを作る
  *                        (押したままの間は LCD に RELEASE=RESET mAh と出る。
  *                         10 秒以上押されたままなら配線のショートとみなして何もしない)
- *   短く押す   : SD が NO SD のときだけ、SD の再初期化を試す (積算はそのまま)
+ *   SD カードの初期化は起動時だけ行う (走行中に NO SD になったら、電源を入れ直すまで記録しない)
  *
  * レース中の故障に備えた動作
  *   - Nano だけがリセットされた場合 (ウォッチドッグ・書き込み・リセットボタン等)、
@@ -48,9 +48,8 @@ constexpr uint16_t LCD_INTERVAL_MS = 250;      // LCD 更新間隔 [ms]
 constexpr uint16_t LCD_REINIT_MS   = 5000;     // LCD 初期化コマンドの再送間隔 [ms] (ノイズ対策)
 constexpr uint16_t LOG_INTERVAL_MS = 1000;     // SD 記録間隔 [ms]
 constexpr uint8_t  LOG_FLUSH_EVERY = 5;        // 何行書くごとに flush するか (1 = 毎行)
-constexpr uint16_t RESET_HOLD_MS   = 1000;     // 積算リセットの長押し時間 [ms]
+constexpr uint16_t RESET_HOLD_MS   = 3000;     // 積算リセットの長押し時間 [ms]
 constexpr uint16_t BTN_STUCK_MS    = 10000;    // これ以上押されたままなら故障 (ショート) とみなす [ms]
-constexpr uint8_t  BTN_SHORT_MIN_MS = 50;      // 短押しと認める最短時間 [ms] (チャタリング除け)
 constexpr uint8_t  PIN_SD_CS       = 10;
 constexpr uint8_t  PIN_BTN         = 2;
 #define SERIAL_DEBUG 1   // 1: 起動時の I2C スキャン結果と CSV を USB シリアル (115200bps) に出す
@@ -439,8 +438,8 @@ void lcdShowMeasurement(uint32_t now) {
     snprintf_P(line + n, sizeof(line) - n, PSTR("   INA!%u"), inaRecoverCount);
   lcdLine(2, line);
 
-  // 4行目: SD 状態 "REC LOG003.CSV     *" / "NO SD  (PUSH=RETRY)"
-  //        ボタンを 1 秒以上押している間は、離すとリセットされることを知らせる
+  // 4行目: SD 状態 "REC LOG003.CSV     *" / "NO SD"
+  //        ボタンを 3 秒以上押している間は、離すとリセットされることを知らせる
   uint32_t held = btnDown ? now - btnDownMs : 0;
   if (held >= BTN_STUCK_MS) {
     lcdLineP(3, F("BUTTON STUCK?"));
@@ -450,7 +449,7 @@ void lcdShowMeasurement(uint32_t now) {
     snprintf_P(line, sizeof(line), PSTR("REC %-15s%c"), logName, heartbeat ? '*' : ' ');
     lcdLine(3, line);
   } else {
-    lcdLineP(3, F("NO SD  (PUSH=RETRY)"));
+    lcdLineP(3, F("NO SD"));
   }
 }
 
@@ -494,17 +493,29 @@ bool openNewLog() {
   return false;  // 1000 ファイル使い切り
 }
 
-// SD を (再) 初期化してログを開く。カードが無いと最大 2 秒ほどかかる
-void startSdLog() {
-  if (logFile) logFile.close();
-  wdtKick();
-  sdOk = SD.begin(PIN_SD_CS) && openNewLog();
-  wdtKick();
-  if (!sdOk) logName[0] = '\0';
+void printSdStatus() {
 #if SERIAL_DEBUG
   Serial.print(F("SD: "));
   if (sdOk) Serial.println(logName); else Serial.println(F("NO SD"));
 #endif
+}
+
+// 起動時だけ SD カードを初期化してログを開く。カードが無いと最大 2 秒ほどかかる
+void sdBegin() {
+  wdtKick();
+  sdOk = SD.begin(PIN_SD_CS) && openNewLog();
+  wdtKick();
+  if (!sdOk) logName[0] = '\0';
+  printSdStatus();
+}
+
+// 新しいログファイルに切り替える (SD の初期化はしない。NO SD のときは何もしない)
+void sdNextFile() {
+  if (!sdOk) return;
+  logFile.close();
+  sdOk = openNewLog();
+  if (!sdOk) logName[0] = '\0';
+  printSdStatus();
 }
 
 // 1 行出力: 経過時間[s], 電圧[V], 電流[A], 電力[W], 積算[mAh]
@@ -553,8 +564,8 @@ void doCounterReset() {
   lcdLineP(0, ok ? F("RESET mAh") : F("RESET FAILED"));
   lcdLineP(1, F(""));
   lcdLineP(2, F(""));
-  lcdLineP(3, F("SD ..."));
-  startSdLog();  // 新しいログファイル (SD が無かった場合はここで再初期化を試す)
+  lcdLineP(3, F(""));
+  sdNextFile();  // 新しいログファイル (SD の初期化はしない)
 #if SERIAL_DEBUG
   Serial.println(F("# mAh reset"));
 #endif
@@ -563,14 +574,7 @@ void doCounterReset() {
   persistSave(millis());
 }
 
-// 短押し (NO SD のときだけ): 積算と経過時間はそのままで SD を再初期化
-void doSdRetry() {
-  lcdLineP(3, F("SD RETRY ..."));
-  startSdLog();
-  nextLcdMs = millis();
-}
-
-// 動作は離したときに決める。押した瞬間 (1 秒経過時) にリセットすると、
+// 動作は離したときに決める。押した瞬間 (3 秒経過時) にリセットすると、
 // 配線が挟まれて GND とショートしたときに走行中の積算が消えてしまうため
 void handleButton(uint32_t now) {
   bool pressed = (digitalRead(PIN_BTN) == LOW);
@@ -588,9 +592,7 @@ void handleButton(uint32_t now) {
       // 長すぎる: ショートや故障とみなして何もしない
     } else if (held >= RESET_HOLD_MS) {
       doCounterReset();
-    } else if (held >= BTN_SHORT_MIN_MS && !sdOk) {
-      doSdRetry();
-    }
+    }                        // 3 秒未満は何もしない
   }
 }
 
@@ -701,7 +703,7 @@ void setup() {
   Serial.print(F("SHUNT_CAL=")); Serial.println(SHUNT_CAL);
 #endif
 
-  startSdLog();
+  sdBegin();
   lcdLineP(2, sdOk ? F("SD OK") : F("NO SD"));
   if (sdOk) lcdLine(3, logName);
 #if SERIAL_DEBUG

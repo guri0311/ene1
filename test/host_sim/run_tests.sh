@@ -60,16 +60,20 @@ expect_lcd 1 "P:  48W"
 expect_charge 898 902
 expect_clean
 
-say "3. 短押し (SD 正常時) は何もしない"
+say "3. 3 秒未満で離すと何もしない (短押し・2.5 秒押し)"
 press 300
+press 2500
 expect_charge 898 902
+expect_lcd 2 "TIME  09:0"
 expect_lcd 3 "REC LOG000.CSV"
 
-say "4. 1 秒以上押している間は合図、離すと積算・時間を 0、新しいファイル"
+say "4. 3 秒以上押している間は合図、離すと積算・時間を 0、新しいファイル"
 button down
-run 1500
+run 2500
+expect_not_lcd 3 "RELEASE"
+run 1000
 expect_lcd 3 "RELEASE=RESET mAh"
-expect_charge 898 902
+expect_charge 893 902
 button up
 run 1000
 lcd
@@ -83,7 +87,7 @@ expect_clean
 EOF
 
 boot sdfail cold <<'EOF'
-say "5. 走行中に SD が抜ける → NO SD、短押しで再試行、積算は消えない"
+say "5. 走行中に SD が抜ける → NO SD、表示と積算は続く"
 v 24
 i 5
 setup
@@ -93,20 +97,18 @@ run 3000
 lcd
 expect_lcd 3 "NO SD"
 expect_charge 85 92
-say "5b. カードが無いまま短押し (約 2 秒止まる) → NO SD のまま"
-press 200
-run 1000
-expect_lcd 3 "NO SD"
-say "5c. カードを挿して短押し → 新しいファイルで再開、積算と時間はそのまま"
+say "5b. カードを挿し直しても、SD の初期化はしないので NO SD のまま (短押し・リセットでも)"
 sd in
 press 200
 run 2000
+expect_lcd 3 "NO SD"
+expect_charge 90 97
+press 3500
+run 1500
 lcd
-expect_lcd 3 "REC LOG001.CSV"
-expect_charge 93 100
-expect_lcd 2 "TIME  01:0"
-run 6000
-expect_last LOG001.CSV ",5.000,"
+expect_lcd 3 "NO SD"
+expect_charge -1 5
+expect_lcd 2 "TIME  00:0"
 expect_clean
 EOF
 
@@ -256,9 +258,9 @@ setup
 i 10
 run 60000
 button down
-run 3000
+run 4000
 expect_lcd 3 "RELEASE=RESET mAh"
-run 9000
+run 8000
 lcd
 expect_lcd 3 "BUTTON STUCK?"
 button up

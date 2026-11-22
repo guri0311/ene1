@@ -352,6 +352,10 @@ int main(int argc, char **argv) {
       int r = (int)num(is); std::string s = quoted(is);
       check(lcd.row(r).find(s) != std::string::npos, "LCD " + std::to_string(r + 1) + "行目に \"" + s + "\" (実際: \"" + lcd.row(r) + "\")");
     }
+    else if (cmd == "expect_not_lcd") {
+      int r = (int)num(is); std::string s = quoted(is);
+      check(lcd.row(r).find(s) == std::string::npos, "LCD " + std::to_string(r + 1) + "行目に \"" + s + "\" が無い (実際: \"" + lcd.row(r) + "\")");
+    }
     else if (cmd == "expect_last") {
       std::string f; is >> f; std::string s = quoted(is), l = lastLine(f);
       check(l.find(s) != std::string::npos, f + " の最終行に \"" + s + "\" (実際: \"" + l + "\")");
