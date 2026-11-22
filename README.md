@@ -44,7 +44,7 @@ arduino-cli lib install SD
 ```
 
 ```bash
-arduino-cli compile --fqbn arduino:avr:nano .
+arduino-cli compile --fqbn arduino:avr:nano Ene1PowerMeter
 ```
 
 ## 状態
