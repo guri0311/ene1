@@ -6,7 +6,9 @@
  *   記録       : microSD (SPI, CS = D10)
  *
  * ボタン (D2 - GND)
- *   1 秒長押し : 積算 mAh・経過時間を 0 にして新しいログファイルを作る
+ *   1 秒以上押して離す : 積算 mAh・経過時間を 0 にして新しいログファイルを作る
+ *                        (押したままの間は LCD に RELEASE=RESET mAh と出る。
+ *                         10 秒以上押されたままなら配線のショートとみなして何もしない)
  *   短く押す   : SD が NO SD のときだけ、SD の再初期化を試す (積算はそのまま)
  *
  * レース中の故障に備えた動作
@@ -45,6 +47,7 @@ constexpr uint16_t LCD_REINIT_MS   = 5000;     // LCD 初期化コマンドの�
 constexpr uint16_t LOG_INTERVAL_MS = 1000;     // SD 記録間隔 [ms]
 constexpr uint8_t  LOG_FLUSH_EVERY = 5;        // 何行書くごとに flush するか (1 = 毎行)
 constexpr uint16_t RESET_HOLD_MS   = 1000;     // 積算リセットの長押し時間 [ms]
+constexpr uint16_t BTN_STUCK_MS    = 10000;    // これ以上押されたままなら故障 (ショート) とみなす [ms]
 constexpr uint8_t  BTN_SHORT_MIN_MS = 50;      // 短押しと認める最短時間 [ms] (チャタリング除け)
 constexpr uint8_t  PIN_SD_CS       = 10;
 constexpr uint8_t  PIN_BTN         = 2;
@@ -109,7 +112,8 @@ constexpr float CURRENT_LSB_NOMINAL = MAX_CURRENT_A / 524288.0f;
 constexpr float SHUNT_CAL_F = 13107.2e6f * CURRENT_LSB_NOMINAL * R_SHUNT_OHM;
 static_assert(SHUNT_CAL_F >= 1.0f && SHUNT_CAL_F <= 32767.0f, "SHUNT_CAL が 15bit に収まらない");
 static_assert(INA_ADCRANGE == 0, "ADCRANGE=1 の場合は SHUNT_CAL を 4 倍する処理を追加すること");
-static_assert(MAX_CURRENT_A * R_SHUNT_OHM <= 0.16384f, "最大電流 x シャント抵抗が ±163.84mV を超える");
+// 上限ちょうど (2mΩ で 81.92A) は float の丸めでわずかに超えるので、1e-4 の誤差を許す
+static_assert(MAX_CURRENT_A * R_SHUNT_OHM <= 0.16384f * 1.0001f, "最大電流 x シャント抵抗が ±163.84mV を超える");
 constexpr uint16_t SHUNT_CAL = (uint16_t)(SHUNT_CAL_F + 0.5f);
 // 整数に丸めた SHUNT_CAL から逆算した実際の CURRENT_LSB (70A/2mΩ なら SHUNT_CAL=3500 で誤差なし)
 constexpr float CURRENT_LSB   = (float)SHUNT_CAL / (13107.2e6f * R_SHUNT_OHM);
@@ -140,7 +144,6 @@ uint8_t  inaRecoverCount = 0;      // INA228 を再設定した回数 (LCD 3 行
 
 bool     sdOk            = false;
 bool     heartbeat       = false;  // 記録するたびに反転 (4 行目末尾の * で動作確認)
-uint16_t nextLogIndex    = 0;      // 次に探し始めるファイル番号
 uint8_t  linesSinceFlush = 0;
 uint32_t timerStartMs    = 0;      // 経過時間の基準 (起動時・リセット時)
 uint32_t nextLogMs       = 0;
@@ -148,7 +151,6 @@ uint32_t nextLcdMs       = 0;
 uint32_t lastLcdInitMs   = 0;
 uint32_t btnDownMs       = 0;
 bool     btnDown         = false;
-bool     btnHandled      = false;
 
 // Nano がリセットされても消えない RAM 領域 (.noinit)。電源を切ると中身は不定になるので
 // チェック値で正しさを確かめてから使う
@@ -293,11 +295,13 @@ bool inaWrite16(uint8_t reg, uint16_t val) {
 }
 
 // 24bit レジスタの上位 20bit を符号付き整数にする
+// (負の値のシフトは C++ では未定義・処理系依存なので、符号なしのまま計算してから引く)
 int32_t toSigned20(uint32_t raw24) {
-  return (int32_t)(raw24 << 8) >> 12;  // 上位に寄せてから算術シフトで符号拡張
+  int32_t v = (int32_t)((raw24 >> 4) & 0xFFFFFUL);
+  return (v & 0x80000L) ? v - 0x100000L : v;
 }
 
-// INA228 がこのスケッチの設定のまま動いているか (電源投入直後は SHUNT_CAL=0 などの既定値)
+// INA228 がこのスケッチの設定のまま動いているか (電源投入直後は各レジスタが既定値に戻っている)
 enum : uint8_t { INA_CONFIGURED, INA_NOT_CONFIGURED, INA_NO_RESPONSE };
 uint8_t inaCheckConfig() {  // 戻り値は上の INA_* のどれか
   uint16_t cal, adc, cfg;
@@ -340,27 +344,31 @@ void inaRecover() {
 // 電圧・電流・電力・積算 mAh をまとめて読む。
 // 読み出しの前後で SHUNT_CAL を確かめ、途中で INA228 がリセットされた値は採用しない
 bool inaMeasure(Measurement &m) {
-  uint16_t cal;
   uint32_t rv, ri, rp;
   uint8_t q[5];
 
-  if (!inaRead16(REG_SHUNT_CAL, cal)) return m.ok = false;
-  if (cal != SHUNT_CAL) {           // 設定が消えている (電源瞬断など)
+  // SHUNT_CAL だけで判定すると、設定値がたまたま INA228 の既定値と同じとき
+  // (既定値が 0x1000 なら MAX_CURRENT_A = 81.92 で一致する) にリセットを見逃すので、
+  // ADC_CONFIG・CONFIG も確かめる
+  uint8_t st = inaCheckConfig();
+  if (st == INA_NO_RESPONSE) return m.ok = false;
+  if (st == INA_NOT_CONFIGURED) {   // 設定が消えている (電源瞬断など)
     inaRecover();
     return m.ok = false;            // 今回は値を使わない (次回から正常に読める)
   }
   if (!inaRead24(REG_VBUS, rv) || !inaRead24(REG_CURRENT, ri) ||
       !inaRead24(REG_POWER, rp) || !inaRead(REG_CHARGE, q, 5))
     return m.ok = false;
-  if (!inaRead16(REG_SHUNT_CAL, cal) || cal != SHUNT_CAL) return m.ok = false;
+  if (inaCheckConfig() != INA_CONFIGURED) return m.ok = false;  // 読み出し中にリセットされた
 
   m.voltage = toSigned20(rv) * VBUS_LSB_V;
   m.current = toSigned20(ri) * CURRENT_LSB;
   m.power   = rp * POWER_LSB_W;     // 24bit 全部が値 (符号なし)
   // CHARGE は 40bit の 2 の補数。float で上位と下位を足すと負の値で桁落ちするので、
-  // 64bit 整数で組み立ててから float にする
-  int64_t qraw = ((int64_t)(int8_t)q[0] << 32) | ((uint32_t)q[1] << 24) |
-                 ((uint32_t)q[2] << 16) | ((uint32_t)q[3] << 8) | q[4];
+  // 64bit 整数で組み立ててから float にする (負の値のシフトは避け、符号なしで組んでから引く)
+  uint64_t qu = ((uint64_t)q[0] << 32) | ((uint32_t)q[1] << 24) |
+                ((uint32_t)q[2] << 16) | ((uint32_t)q[3] << 8) | q[4];
+  int64_t qraw = (qu & 0x8000000000ULL) ? (int64_t)qu - 0x10000000000LL : (int64_t)qu;
   m.chargemAh = (float)qraw * CHARGE_LSB_MAH + chargeOffsetmAh;
   haveMeas = true;
   return m.ok = true;
@@ -420,7 +428,13 @@ void lcdShowMeasurement(uint32_t now) {
   lcdLine(2, line);
 
   // 4行目: SD 状態 "REC LOG003.CSV     *" / "NO SD  (PUSH=RETRY)"
-  if (sdOk) {
+  //        ボタンを 1 秒以上押している間は、離すとリセットされることを知らせる
+  uint32_t held = btnDown ? now - btnDownMs : 0;
+  if (held >= BTN_STUCK_MS) {
+    lcdLineP(3, F("BUTTON STUCK?"));
+  } else if (held >= RESET_HOLD_MS) {
+    lcdLineP(3, F("RELEASE=RESET mAh"));
+  } else if (sdOk) {
     snprintf_P(line, sizeof(line), PSTR("REC %-15s%c"), logName, heartbeat ? '*' : ' ');
     lcdLine(3, line);
   } else {
@@ -431,15 +445,30 @@ void lcdShowMeasurement(uint32_t now) {
 // ============================================================================
 //  SD ログ
 // ============================================================================
-// LOG000.CSV〜LOG999.CSV の空き番号で新規作成し、logName に名前を入れる
+void logFileName(char *name, uint16_t index) {
+  snprintf_P(name, 13, PSTR("LOG%03u.CSV"), index);
+}
+
+// LOG000.CSV〜LOG999.CSV の空き番号で新規作成し、logName に名前を入れる。
+// SD.exists() は毎回ルートディレクトリを先頭から読むので、0 から 1 つずつ調べると
+// ファイルが数百個あるときに数秒〜数十秒かかり、ウォッチドッグで再起動を繰り返してしまう。
+// ファイルは番号順に作られるので、二分探索で「最後のファイルの次」を約 10 回の確認で見つける
+// (途中の番号が抜けていても、見つかるのは必ず存在しない番号なので上書きはしない)
 bool openNewLog() {
   char name[13];
-  for (; nextLogIndex < 1000; nextLogIndex++) {
-    snprintf_P(name, sizeof(name), PSTR("LOG%03u.CSV"), nextLogIndex);
+  uint16_t lo = 0, hi = 1000;
+  while (lo < hi) {
+    uint16_t mid = (lo + hi) / 2;
+    logFileName(name, mid);
+    if (SD.exists(name)) lo = mid + 1; else hi = mid;
+    wdtKick();
+  }
+  for (uint16_t idx = lo; idx < 1000; idx++) {
+    logFileName(name, idx);
+    wdtKick();
     if (SD.exists(name)) continue;
     logFile = SD.open(name, FILE_WRITE);
     if (!logFile) return false;
-    nextLogIndex++;
     logFile.println(F("time_s,voltage_V,current_A,power_W,charge_mAh"));
     logFile.flush();
     if (logFile.getWriteError()) {
@@ -529,24 +558,55 @@ void doSdRetry() {
   nextLcdMs = millis();
 }
 
+// 動作は離したときに決める。押した瞬間 (1 秒経過時) にリセットすると、
+// 配線が挟まれて GND とショートしたときに走行中の積算が消えてしまうため
 void handleButton(uint32_t now) {
   bool pressed = (digitalRead(PIN_BTN) == LOW);
   if (pressed) {
     if (!btnDown) {          // 押し始め (チャタリングで離れたらタイマーはやり直し)
       btnDown = true;
       btnDownMs = now;
-    } else if (!btnHandled && now - btnDownMs >= RESET_HOLD_MS) {
-      btnHandled = true;     // 離すまで再実行しない
-      doCounterReset();
     }
     return;
   }
-  // 離したとき: 長押しに届かなかった短押しなら SD 再試行
-  if (btnDown && !btnHandled && !sdOk && now - btnDownMs >= BTN_SHORT_MIN_MS)
-    doSdRetry();
-  btnDown = false;
-  btnHandled = false;
+  if (btnDown) {             // 離したとき
+    uint32_t held = now - btnDownMs;
+    btnDown = false;
+    if (held >= BTN_STUCK_MS) {
+      // 長すぎる: ショートや故障とみなして何もしない
+    } else if (held >= RESET_HOLD_MS) {
+      doCounterReset();
+    } else if (held >= BTN_SHORT_MIN_MS && !sdOk) {
+      doSdRetry();
+    }
+  }
 }
+
+// ============================================================================
+//  RAM の実測 (実機・SERIAL_DEBUG 時のみ)
+//  起動時に空き RAM を目印 (0xA5) で塗り、スタックが一番深く伸びたときに
+//  上書きされずに残った量を「最小空き RAM」として 30 秒ごとにシリアルに出す
+// ============================================================================
+#if SERIAL_DEBUG && defined(__AVR__)
+extern char __heap_start;
+extern char *__brkval;
+constexpr uint8_t RAM_CANARY = 0xA5;
+uint32_t lastRamReportMs = 0;
+
+uint8_t *ramHeapTop() { return (uint8_t *)(__brkval ? __brkval : &__heap_start); }
+
+void ramPaint() {
+  uint8_t *p = ramHeapTop(), *sp = (uint8_t *)SP;
+  while (p < sp - 32) *p++ = RAM_CANARY;  // 今使っているスタックの手前 32 バイトは残す
+}
+
+uint16_t ramMinFree() {
+  uint8_t *p = ramHeapTop(), *sp = (uint8_t *)SP;
+  uint16_t n = 0;
+  while (p < sp && *p == RAM_CANARY) { p++; n++; }
+  return n;
+}
+#endif
 
 // ============================================================================
 //  setup / loop
@@ -558,6 +618,9 @@ void haltWithMessage() {
 void setup() {
 #if USE_WATCHDOG
   wdt_enable(WDTO_8S);
+#endif
+#if SERIAL_DEBUG && defined(__AVR__)
+  ramPaint();
 #endif
   pinMode(PIN_BTN, INPUT_PULLUP);
 #if SERIAL_DEBUG
@@ -663,6 +726,14 @@ void loop() {
     if (sdOk) writeLog(now);
 #if SERIAL_DEBUG
     printCsvRow(Serial, now - timerStartMs);
+#endif
+#if SERIAL_DEBUG && defined(__AVR__)
+    if (now - lastRamReportMs >= 30000) {
+      lastRamReportMs = now;
+      Serial.print(F("# RAM min free: "));
+      Serial.print(ramMinFree());
+      Serial.println(F(" bytes"));
+    }
 #endif
   }
 }
