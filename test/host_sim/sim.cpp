@@ -78,11 +78,13 @@ struct Ina228 {
   // シャント電圧を ADC 範囲 (±163.84mV) で切ったうえでの CURRENT レジスタ値
   double currentCounts() const {
     if (shuntCal == 0) return 0;
+    bool low = config & 0x0010;                 // ADCRANGE=1: ±40.96mV
+    double fs = low ? 0.04096 : 0.16384, k = low ? 4.0 : 1.0;
     double vsh = iTrue * rTrue;
-    if (vsh > 0.16384) vsh = 0.16384;
-    if (vsh < -0.16384) vsh = -0.16384;
-    // CURRENT_LSB x R = SHUNT_CAL / 13107.2e6 なので CURRENT = Vshunt x 13107.2e6 / SHUNT_CAL
-    double c = vsh * 13107.2e6 / shuntCal;
+    if (vsh > fs) vsh = fs;
+    if (vsh < -fs) vsh = -fs;
+    // CURRENT_LSB x R = SHUNT_CAL / (13107.2e6 x k) なので CURRENT = Vshunt x 13107.2e6 x k / SHUNT_CAL
+    double c = vsh * 13107.2e6 * k / shuntCal;
     if (c > 524287) c = 524287;
     if (c < -524288) c = -524288;
     return std::round(c);

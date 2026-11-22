@@ -7,7 +7,7 @@ Ene-1 GP（電動カー競技）用の車載電力計。Arduino Nano で INA228 
 | 部品 | 内容 |
 |---|---|
 | マイコン | Arduino Nano（ATmega328P / 5V） |
-| 電流・電圧センサー | Strawberry Linux #11228（INA228、シャント 2mΩ、I2C 0x40） |
+| 電流・電圧センサー | Strawberry Linux #11228（INA228、シャント 2mΩ、I2C 0x40）。ローレンジ（±40.96mV）で 20A まで測定 |
 | 表示 | 秋月 ACM2004D-FLW-FBW-IIC（20×4、RW1063） |
 | 記録 | microSD モジュール（SPI、CS = D10） |
 | ボタン | D2–GND 間（1 秒以上押して離す＝積算リセット、短押し＝SD 再試行） |

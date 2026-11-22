@@ -12,10 +12,12 @@ CXX_FLAGS=(-std=gnu++17 -O1 -Wall -Wextra -Wno-unused-parameter -I "$HERE/mock")
 # SIM_SANITIZE=1 でメモリ破壊・未定義動作の検査付きでビルドする
 if [ "${SIM_SANITIZE:-0}" = 1 ]; then CXX_FLAGS+=(-g -fsanitize=address,undefined -fno-sanitize-recover=undefined); fi
 g++ "${CXX_FLAGS[@]}" -o "$WORK/sim" "$HERE/sim.cpp" || exit 1
-# 最大電流を 81.92A にした版 (SHUNT_CAL が INA228 の既定値 0x1000 と同じになる境界条件)
+# 高レンジ (ADCRANGE=0)・最大電流 81.92A にした版 (SHUNT_CAL が 0x1000 になる境界条件)
 mkdir -p "$WORK/v8192"
-sed 's/MAX_CURRENT_A   = 70.0f/MAX_CURRENT_A   = 81.92f/' "$HERE/../../Ene1PowerMeter/Ene1PowerMeter.ino" > "$WORK/v8192/sketch.ino"
-grep -q "MAX_CURRENT_A   = 81.92f" "$WORK/v8192/sketch.ino" || { echo "81.92A 版の生成に失敗"; exit 1; }
+sed -e 's/MAX_CURRENT_A   = 20.0f/MAX_CURRENT_A   = 81.92f/' -e 's/INA_ADCRANGE = 1;/INA_ADCRANGE = 0;/' \
+  "$HERE/../../Ene1PowerMeter/Ene1PowerMeter.ino" > "$WORK/v8192/sketch.ino"
+grep -q "MAX_CURRENT_A   = 81.92f" "$WORK/v8192/sketch.ino" && grep -q "INA_ADCRANGE = 0;" "$WORK/v8192/sketch.ino" \
+  || { echo "81.92A 版の生成に失敗"; exit 1; }
 g++ "${CXX_FLAGS[@]}" -DSKETCH_PATH="\"$WORK/v8192/sketch.ino\"" -o "$WORK/sim8192" "$HERE/sim.cpp" || exit 1
 
 FAILED=0
@@ -217,13 +219,20 @@ expect_clean
 EOF
 
 boot overrange cold <<'EOF'
-say "13. 70A を超える電流 (90A) → CURRENT レジスタが 70A (MAX_CURRENT_A) で頭打ちになる"
+say "13. ローレンジ (20A まで): 19.9A は正しく表示、25A は OVER 表示で 20A に頭打ち"
 v 24
-i 90
 setup
+i 19.9
 run 2000
+expect_lcd 0 "I: 19.90A"
+i 25
+run 36000
 lcd
-expect_lcd 0 "I: 70.00A"
+expect_lcd 0 "I:  OVER"
+expect_charge 205 215
+i -25
+run 2000
+expect_lcd 0 "I:  OVER"
 expect_clean
 EOF
 
@@ -273,12 +282,12 @@ expect_charge 20 25
 EOF
 
 boot glitch8192 cold sim8192 <<'EOF'
-say "17. MAX_CURRENT_A = 81.92 (SHUNT_CAL = 0x1000 = 既定値) でも INA228 の瞬断を検出する"
+say "17. 高レンジ・81.92A (SHUNT_CAL = 0x1000 = 既定値と同じ) でも INA228 の瞬断を検出する"
 v 24
 i 90
 setup
 run 2000
-expect_lcd 0 "I: 81.92A"
+expect_lcd 0 "I:  OVER"
 i 10
 run 36000
 ina glitch

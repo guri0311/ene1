@@ -39,7 +39,9 @@
 // シャント抵抗 [Ω]。基準の電流計と比べて表示がずれる場合はこの値で校正する
 // (例: 表示が 1% 大きい → 0.002 x 1.01 = 0.00202)。電流・電力・積算すべてに効く
 constexpr float    R_SHUNT_OHM     = 0.002f;
-constexpr float    MAX_CURRENT_A   = 70.0f;    // 想定最大電流 [A] (CURRENT_LSB の計算に使う)
+// 想定最大電流 [A] (CURRENT_LSB の計算に使う)。これを超えると電流が頭打ちになり LCD に OVER と出る。
+// 2mΩ では ADCRANGE=1 のとき 20.48A、ADCRANGE=0 のとき 81.92A まで設定できる
+constexpr float    MAX_CURRENT_A   = 20.0f;
 constexpr uint8_t  INA228_ADDR     = 0x40;     // INA228 の I2C アドレス (A0=A1=GND)
 constexpr uint8_t  LCD_ADDR        = 0x3C;     // LCD の I2C アドレス (応答がなければ 0x3C〜0x3F から自動で探す)
 constexpr uint16_t LCD_INTERVAL_MS = 250;      // LCD 更新間隔 [ms]
@@ -60,7 +62,9 @@ constexpr uint8_t INA_VBUSCT = 5;    // バス電圧 変換時間 5 = 1052us
 constexpr uint8_t INA_VSHCT  = 5;    // シャント電圧 変換時間 5 = 1052us
 constexpr uint8_t INA_VTCT   = 5;    // 温度 変換時間 (MODE=0xB では未使用)
 constexpr uint8_t INA_AVG    = 3;    // 平均回数 3 = 64 回 → (1052+1052)us x 64 ≒ 135ms ごとに更新
-constexpr uint8_t INA_ADCRANGE = 0;  // 0 = ±163.84mV (1 にする場合は SHUNT_CAL を 4 倍する必要あり)
+// シャント電圧の測定範囲。1 = ±40.96mV (ローレンジ、分解能 4 倍)、0 = ±163.84mV
+// 10A ブレーカの後ろで使うので、2mΩ で 20.48A まで測れるローレンジにしている
+constexpr uint8_t INA_ADCRANGE = 1;
 
 // ============================================================================
 //  LCD (RW1063) の I2C 仕様  (RW1063-0A-001 データシート Rev.0.5 で確認)
@@ -108,15 +112,20 @@ constexpr uint16_t ADC_CONFIG_VALUE =
 
 // CURRENT_LSB = 最大電流 / 2^19
 constexpr float CURRENT_LSB_NOMINAL = MAX_CURRENT_A / 524288.0f;
-// SHUNT_CAL = 13107.2e6 x CURRENT_LSB x R_SHUNT  (ADCRANGE=0 の式)
-constexpr float SHUNT_CAL_F = 13107.2e6f * CURRENT_LSB_NOMINAL * R_SHUNT_OHM;
+// SHUNT_CAL = 13107.2e6 x CURRENT_LSB x R_SHUNT。ADCRANGE=1 のときは 4 倍する (データシート)
+constexpr float ADCRANGE_FACTOR = INA_ADCRANGE ? 4.0f : 1.0f;
+constexpr float SHUNT_FULL_SCALE_V = INA_ADCRANGE ? 0.04096f : 0.16384f;  // シャント電圧の測定範囲
+constexpr float SHUNT_CAL_F = 13107.2e6f * CURRENT_LSB_NOMINAL * R_SHUNT_OHM * ADCRANGE_FACTOR;
+static_assert(INA_ADCRANGE <= 1, "INA_ADCRANGE は 0 か 1");
 static_assert(SHUNT_CAL_F >= 1.0f && SHUNT_CAL_F <= 32767.0f, "SHUNT_CAL が 15bit に収まらない");
-static_assert(INA_ADCRANGE == 0, "ADCRANGE=1 の場合は SHUNT_CAL を 4 倍する処理を追加すること");
 // 上限ちょうど (2mΩ で 81.92A) は float の丸めでわずかに超えるので、1e-4 の誤差を許す
-static_assert(MAX_CURRENT_A * R_SHUNT_OHM <= 0.16384f * 1.0001f, "最大電流 x シャント抵抗が ±163.84mV を超える");
+static_assert(MAX_CURRENT_A * R_SHUNT_OHM <= SHUNT_FULL_SCALE_V * 1.0001f,
+              "最大電流 x シャント抵抗がシャント電圧の測定範囲 (INA_ADCRANGE) を超える");
 constexpr uint16_t SHUNT_CAL = (uint16_t)(SHUNT_CAL_F + 0.5f);
-// 整数に丸めた SHUNT_CAL から逆算した実際の CURRENT_LSB (70A/2mΩ なら SHUNT_CAL=3500 で誤差なし)
-constexpr float CURRENT_LSB   = (float)SHUNT_CAL / (13107.2e6f * R_SHUNT_OHM);
+// 整数に丸めた SHUNT_CAL から逆算した実際の CURRENT_LSB (20A/2mΩ/ADCRANGE=1 なら SHUNT_CAL=4000 で誤差なし)
+constexpr float CURRENT_LSB   = (float)SHUNT_CAL / (13107.2e6f * R_SHUNT_OHM * ADCRANGE_FACTOR);
+// 電流がこの値以上なら頭打ち (測定範囲外) とみなす
+constexpr float OVER_CURRENT_A = MAX_CURRENT_A - 2.0f * CURRENT_LSB;
 constexpr float VBUS_LSB_V    = 195.3125e-6f;                         // バス電圧 LSB
 constexpr float POWER_LSB_W   = 3.2f * CURRENT_LSB;                    // 電力 LSB
 constexpr float CHARGE_LSB_MAH = CURRENT_LSB / 3.6f;                   // 電荷 LSB [C]→[mAh]
@@ -348,7 +357,7 @@ bool inaMeasure(Measurement &m) {
   uint8_t q[5];
 
   // SHUNT_CAL だけで判定すると、設定値がたまたま INA228 の既定値と同じとき
-  // (既定値が 0x1000 なら MAX_CURRENT_A = 81.92 で一致する) にリセットを見逃すので、
+  // (既定値が 0x1000 なら、2mΩ で ADCRANGE=0・81.92A や ADCRANGE=1・20.48A のとき一致する) にリセットを見逃すので、
   // ADC_CONFIG・CONFIG も確かめる
   uint8_t st = inaCheckConfig();
   if (st == INA_NO_RESPONSE) return m.ok = false;
@@ -405,8 +414,11 @@ void lcdShowMeasurement(uint32_t now) {
     // dtostrf のバッファあふれを防ぐため表示範囲に制限
     dtostrf(constrain(meas.voltage, -9.99f, 99.99f), 6, 2, a);   // " 28.00"
     dtostrf(constrain(meas.current, -99.99f, 99.99f), 6, 2, b);  // "-70.00"
-    // 1行目: "V: 28.00V  I:-70.00A" (20 文字)
-    snprintf_P(line, sizeof(line), PSTR("V:%sV  I:%sA"), a, b);
+    // 1行目: "V: 28.00V  I:-12.34A" (20 文字)。測定範囲を超えたら "V: 28.00V  I:  OVER"
+    if (fabs(meas.current) >= OVER_CURRENT_A)
+      snprintf_P(line, sizeof(line), PSTR("V:%sV  I:  OVER"), a);
+    else
+      snprintf_P(line, sizeof(line), PSTR("V:%sV  I:%sA"), a, b);
     lcdLine(0, line);
 
     long pw = lround(constrain(meas.power, 0.0f, 9999.0f));
