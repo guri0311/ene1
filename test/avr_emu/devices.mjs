@@ -97,7 +97,9 @@ export class INA228 {
     if (n <= 0) return;
     const cur = (mode & 2) ? this.currentCounts() : 0;
     this.latched = { vbus: Math.round(this.v / 195.3125e-6), cur };
-    this.charge += cur * n * (period / 1e6);
+    // RSTACC は自動で 0 に戻らない厳しい側でモデル化する (1 の間は CHARGE を 0 に保つ)
+    if (this.config & 0x4000) this.charge = 0;
+    else this.charge += cur * n * (period / 1e6);
     this.lastConvUs += n * period;
   }
   setCurrent(a) { this.update(); this.i = a; }
@@ -140,7 +142,7 @@ export class INA228 {
       const v = (this.wbuf[1] << 8) | this.wbuf[2];
       if (this.ptr === 0x00) {
         if (v & 0x8000) { this.powerOn(); this.ptr = 0; }
-        else { if (v & 0x4000) this.charge = 0; this.config = v & 0x3fff; }
+        else { if (v & 0x4000) this.charge = 0; this.config = v & 0x7ff0; }
       } else if (this.ptr === 0x01) { this.adcConfig = v; this.lastConvUs = this.board.timeUs; }
       else if (this.ptr === 0x02) this.shuntCal = v & 0x7fff;
     }

@@ -83,6 +83,10 @@ expect_lcd 3 "REC LOG001.CSV"
 expect_last LOG001.CSV "charge_mAh"
 run 6000
 expect_last LOG001.CSV "5.0,"
+say "4b. リセットのあとも積算が再開する (RSTACC が 1 のまま残ると 0 で止まる)"
+i 10
+run 36000
+expect_charge 93 99
 expect_clean
 EOF
 
