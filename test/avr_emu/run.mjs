@@ -238,6 +238,8 @@ scenario('ボタン: 3 秒未満は何もしない、3 秒以上で離すとリ�
   expectSerial(b, /^# mAh reset/, '"# mAh reset"');
   b.run(20000);
   const q1 = lcdCharge(b);
+  // リセットのあとも積算が再開する (RSTACC が 1 のまま残ると 0 で止まる)。10A x 20 秒 ≒ 56mAh
+  check(q1 >= 50 && q1 <= 63, `リセット後に積算が再開する (${q1} mAh が 50〜63)`);
   b.setButton(true);
   b.run(12000);
   expectLcd(b, 3, 'BUTTON STUCK?');
