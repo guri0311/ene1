@@ -39,7 +39,7 @@
 constexpr float    R_SHUNT_OHM     = 0.002f;
 constexpr float    MAX_CURRENT_A   = 70.0f;    // 想定最大電流 [A] (CURRENT_LSB の計算に使う)
 constexpr uint8_t  INA228_ADDR     = 0x40;     // INA228 の I2C アドレス (A0=A1=GND)
-constexpr uint8_t  LCD_ADDR        = 0x3C;     // ※要確認: 秋月サンプルで照合する (7bit アドレス)
+constexpr uint8_t  LCD_ADDR        = 0x3C;     // LCD の I2C アドレス (応答がなければ 0x3C〜0x3F から自動で探す)
 constexpr uint16_t LCD_INTERVAL_MS = 250;      // LCD 更新間隔 [ms]
 constexpr uint16_t LCD_REINIT_MS   = 5000;     // LCD 初期化コマンドの再送間隔 [ms] (ノイズ対策)
 constexpr uint16_t LOG_INTERVAL_MS = 1000;     // SD 記録間隔 [ms]
@@ -60,21 +60,25 @@ constexpr uint8_t INA_AVG    = 3;    // 平均回数 3 = 64 回 → (1052+1052)u
 constexpr uint8_t INA_ADCRANGE = 0;  // 0 = ±163.84mV (1 にする場合は SHUNT_CAL を 4 倍する必要あり)
 
 // ============================================================================
-//  LCD (RW1063) のコマンド  ※要確認: 秋月サンプルで照合する
-//    I2C では [制御バイト][本体] の順に送る。制御バイト 0x00 = コマンド, 0x40 = 表示データ
-//    コマンド本体は HD44780 互換
+//  LCD (RW1063) の I2C 仕様  (RW1063-0A-001 データシート Rev.0.5 で確認)
+//  - 7bit アドレスは 0 1 1 1 1 SA1 SA0 → 0x3C〜0x3F (p.28)。SA1/SA0 はモジュール基板の配線で決まる
+//  - 送り方は [アドレス][制御バイト][本体...] (p.28)。制御バイトは Co A0 0 0 0 0 0 0 で、
+//    Co=0 にするとそれ以降 STOP まで同じ種類が続く。A0=0 → コマンド (0x00), A0=1 → 表示データ (0x40)
+//  - I2C では Busy Flag を読めないので、コマンドごとに待ち時間を入れる (p.21)
+//  - コマンド本体は HD44780 互換 (p.17)。実行時間は 540kHz で 18.5us、全消去 0.76ms。
+//    発振周波数は最小 380kHz なので最悪 26us / 1.1ms (p.36-37)
 // ============================================================================
+constexpr uint8_t LCD_ADDR_FIRST = 0x3C;
+constexpr uint8_t LCD_ADDR_LAST  = 0x3F;
 constexpr uint8_t LCD_CTRL_CMD  = 0x00;
 constexpr uint8_t LCD_CTRL_DATA = 0x40;
-constexpr uint8_t LCD_CMD_CLEAR = 0x01;  // 全消去 (実行に約 1.5ms)
-constexpr uint8_t LCD_CMD_DDRAM = 0x80;  // 0x80 | アドレス で書き込み位置を指定
-// 初期化コマンド列 (順に送る。表示内容を消さないので走行中の再送にも使う)
-const uint8_t LCD_INIT_SEQ[] PROGMEM = {
-  0x38,  // Function set: 8bit, 2 行モード (20x4 は 2 行モードを折り返して使う)
-  0x0C,  // Display ON, カーソル OFF, 点滅 OFF
-  0x06,  // Entry mode: アドレス自動インクリメント, シフトなし
-};
-// 20x4 の各行の先頭 DDRAM アドレス
+constexpr uint8_t LCD_CMD_FUNCTION = 0x38;  // Function set: DL=1 (I2C では必須), N=1 (2 行モード), F=0 (5x8)
+constexpr uint8_t LCD_CMD_DISPLAY  = 0x0C;  // Display ON, カーソル OFF, 点滅 OFF
+constexpr uint8_t LCD_CMD_CLEAR    = 0x01;  // 全消去
+constexpr uint8_t LCD_CMD_ENTRY    = 0x06;  // Entry mode: アドレス自動インクリメント, シフトなし
+constexpr uint8_t LCD_CMD_DDRAM    = 0x80;  // 0x80 | アドレス で書き込み位置を指定
+// 20x4 の各行の先頭 DDRAM アドレス。RW1063 の 2 行モード (1 行目 00h〜27h, 2 行目 40h〜67h, p.13/p.20)
+// の各 40 文字を 20 文字ずつ折り返して 4 行にしている (表示行 1→00h, 2→40h, 3→14h, 4→54h)
 const uint8_t LCD_ROW_ADDR[4] PROGMEM = {0x00, 0x40, 0x14, 0x54};
 constexpr uint8_t LCD_COLS = 20;
 constexpr uint8_t LCD_ROWS = 4;
@@ -183,7 +187,7 @@ void i2cScan() {
       if (a < 0x10) Serial.print('0');
       Serial.print(a, HEX);
       if (a == INA228_ADDR) Serial.print(F("(INA228)"));
-      if (a == LCD_ADDR)    Serial.print(F("(LCD)"));
+      if (a >= LCD_ADDR_FIRST && a <= LCD_ADDR_LAST) Serial.print(F("(LCD?)"));
       found++;
     }
   }
@@ -195,28 +199,43 @@ void i2cScan() {
 // ============================================================================
 //  LCD 軽量ドライバ (RW1063, I2C)
 // ============================================================================
-bool lcdCommand(uint8_t cmd) {
-  Wire.beginTransmission(LCD_ADDR);
+uint8_t lcdAddr = LCD_ADDR;  // 実際に使う LCD のアドレス (起動時に決める)
+
+bool i2cPresent(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;
+}
+
+// コマンドを 1 つ送り、waitUs だけ待つ (I2C では Busy Flag を読めないため)
+bool lcdCommand(uint8_t cmd, uint16_t waitUs = 50) {
+  Wire.beginTransmission(lcdAddr);
   Wire.write(LCD_CTRL_CMD);
   Wire.write(cmd);
   bool ok = (Wire.endTransmission() == 0);
-  if (cmd == LCD_CMD_CLEAR) delay(2);   // 全消去は約 1.5ms
-  else delayMicroseconds(50);           // 通常コマンドは約 40us
+  delayMicroseconds(waitUs);
   return ok;
 }
 
-// 初期化コマンド列を送る (表示内容は消さない)
-bool lcdSendInitSeq() {
-  bool ok = true;
-  for (uint8_t i = 0; i < sizeof(LCD_INIT_SEQ); i++)
-    ok &= lcdCommand(pgm_read_byte(&LCD_INIT_SEQ[i]));
+// 表示を消さずに設定だけ送り直す (走行中のノイズ対策で定期的に呼ぶ)
+bool lcdResendSettings() {
+  bool ok = lcdCommand(LCD_CMD_FUNCTION, 120);
+  ok &= lcdCommand(LCD_CMD_DISPLAY, 120);
+  ok &= lcdCommand(LCD_CMD_ENTRY, 120);
   return ok;
 }
 
+// データシート p.32「Serial Interface」の初期化手順どおり
 bool lcdInit() {
-  delay(50);  // 電源投入後の待ち
-  bool ok = lcdSendInitSeq();
-  ok &= lcdCommand(LCD_CMD_CLEAR);
+  delay(50);                                   // VDD が 4.5V に達してから 40ms 以上待つ
+  if (!i2cPresent(lcdAddr)) {                  // 指定アドレスに居なければ 0x3C〜0x3F を探す
+    for (uint8_t a = LCD_ADDR_FIRST; a <= LCD_ADDR_LAST; a++)
+      if (i2cPresent(a)) { lcdAddr = a; break; }
+  }
+  bool ok = lcdCommand(LCD_CMD_FUNCTION, 120); // Function set → 100us 以上
+  ok &= lcdCommand(LCD_CMD_DISPLAY, 120);      // Display ON/OFF → 100us 以上
+  ok &= lcdCommand(LCD_CMD_CLEAR, 0);          // Clear Display → 10ms 以上
+  delay(11);
+  ok &= lcdCommand(LCD_CMD_ENTRY, 120);        // Entry mode set → 100us 以上
   return ok;
 }
 
@@ -224,7 +243,7 @@ bool lcdInit() {
 void lcdLine(uint8_t row, const char *s) {
   if (row >= LCD_ROWS) return;
   lcdCommand(LCD_CMD_DDRAM | pgm_read_byte(&LCD_ROW_ADDR[row]));
-  Wire.beginTransmission(LCD_ADDR);     // 制御バイト + 20 バイト = 21 < Wire バッファ 32
+  Wire.beginTransmission(lcdAddr);      // 制御バイト + 20 バイト = 21 < Wire バッファ 32
   Wire.write(LCD_CTRL_DATA);
   uint8_t n = 0;
   while (n < LCD_COLS && s[n]) Wire.write((uint8_t)s[n++]);
@@ -555,7 +574,9 @@ void setup() {
 
   bool lcdOk = lcdInit();
 #if SERIAL_DEBUG
-  if (!lcdOk) Serial.println(F("LCD: no ACK (check LCD_ADDR)"));
+  Serial.print(F("LCD: 0x"));
+  Serial.print(lcdAddr, HEX);
+  Serial.println(lcdOk ? F(" OK") : F(" no ACK (check wiring)"));
 #else
   (void)lcdOk;
 #endif
@@ -627,7 +648,7 @@ void loop() {
     nextLcdMs += LCD_INTERVAL_MS;
     if ((int32_t)(now - nextLcdMs) >= 0) nextLcdMs = now + LCD_INTERVAL_MS;  // 遅れたら追いつかない
     if (now - lastLcdInitMs >= LCD_REINIT_MS) {  // ノイズで化けた LCD を立て直す
-      lcdSendInitSeq();
+      lcdResendSettings();
       lastLcdInitMs = now;
     }
     inaMeasure(meas);

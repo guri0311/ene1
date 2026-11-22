@@ -71,4 +71,8 @@ arduino-cli compile --fqbn arduino:avr:nano Ene1PowerMeter
 
 ## 状態
 
-LCD の I2C アドレスと初期化コマンド（`LCD_ADDR`, `LCD_INIT_SEQ`）は秋月サンプルとの照合待ちの仮の値。
+LCD の I2C 仕様と初期化手順は RW1063 データシート（Rev.0.5）で確認済み。
+
+- I2C アドレスは 0x3C〜0x3F のどれか（モジュール基板の SA1/SA0 の配線で決まる）。起動時に `LCD_ADDR`（0x3C）から応答を確かめ、なければ 0x3C〜0x3F を自動で探す。見つかったアドレスはシリアルに出る。
+- 初期化はデータシート p.32 の手順（Function set → Display ON → Clear → Entry mode）と待ち時間どおり。
+- 20×4 の各行の先頭アドレス（00h / 40h / 14h / 54h）は、RW1063 の 2 行モードを 20 文字ずつ折り返す一般的な配置。実機で行の順番が正しいか確認すること。
