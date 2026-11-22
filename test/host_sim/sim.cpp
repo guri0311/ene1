@@ -93,6 +93,9 @@ struct Ina228 {
   }
   void advance(double dtSec) {
     if (!present) return;
+    // RSTACC はデータシートに「自動で 0 に戻る」と書かれていないので、1 のまま残る厳しい側でモデル化する。
+    // 1 の間は CHARGE を 0 に保ち続ける
+    if (config & 0x4000) { chargeCounts = 0; return; }
     if ((adcConfig >> 12) & 0x1) chargeCounts += currentCounts() * dtSec;  // シャント測定が有効なら積算
   }
   static void put(uint8_t *b, uint64_t v, int n) { for (int i = 0; i < n; i++) b[i] = v >> (8 * (n - 1 - i)); }
@@ -105,7 +108,7 @@ struct Ina228 {
       if (ptr == 0x00) {
         if (v & 0x8000) { powerOn(); return true; }  // RST
         if (v & 0x4000) chargeCounts = 0;           // RSTACC (ENERGY/CHARGE)
-        config = v & 0x3FFF;
+        config = v & 0x7FF0;                        // bit3-0 は予約 (常に 0)。RSTACC は残る
       } else if (ptr == 0x01) adcConfig = v;
       else if (ptr == 0x02) shuntCal = v & 0x7FFF;
     }

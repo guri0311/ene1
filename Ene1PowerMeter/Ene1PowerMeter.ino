@@ -110,7 +110,7 @@ enum : uint8_t {
   REG_MFG_ID     = 0x3E,  // 16bit = 0x5449 ("TI")
 };
 constexpr uint16_t CONFIG_RST    = 0x8000;  // bit15: 全レジスタをリセット
-constexpr uint16_t CONFIG_RSTACC = 0x4000;  // bit14: ENERGY / CHARGE を 0 に (自動で 0 に戻る)
+constexpr uint16_t CONFIG_RSTACC = 0x4000;  // bit14: ENERGY / CHARGE を 0 に (自動で戻る保証がないので書き戻す)
 constexpr uint16_t CONFIG_VALUE  = (uint16_t)INA_ADCRANGE << 4;  // CONVDLY=0, TEMPCOMP=0
 constexpr uint16_t ADC_CONFIG_VALUE =
     ((uint16_t)INA_MODE << 12) | ((uint16_t)INA_VBUSCT << 9) |
@@ -324,7 +324,7 @@ uint8_t inaCheckConfig() {  // 戻り値は上の INA_* のどれか
       !inaRead16(REG_CONFIG, cfg))
     return INA_NO_RESPONSE;
   bool same = (cal == SHUNT_CAL) && (adc == ADC_CONFIG_VALUE) &&
-              ((cfg & ~(CONFIG_RST | CONFIG_RSTACC)) == CONFIG_VALUE);
+              ((cfg & ~CONFIG_RST) == CONFIG_VALUE);  // RSTACC が 1 のまま (積算が止まる) も設定違いとみなす
   return same ? INA_CONFIGURED : INA_NOT_CONFIGURED;
 }
 
@@ -338,8 +338,12 @@ bool inaConfigure() {
   return inaCheckConfig() == INA_CONFIGURED;  // 書けたか読み戻して確認
 }
 
+// RSTACC はデータシートに「自動で 0 に戻る」と書かれていない (RST だけ "self-clears" とある)。
+// 1 のまま残ると CHARGE が 0 に保たれて積算が止まるので、すぐに 0 を書き戻す
 bool inaResetCharge() {
-  return inaWrite16(REG_CONFIG, CONFIG_VALUE | CONFIG_RSTACC);
+  bool ok = inaWrite16(REG_CONFIG, CONFIG_VALUE | CONFIG_RSTACC);
+  ok = inaWrite16(REG_CONFIG, CONFIG_VALUE) && ok;   // 1 回目が失敗しても RSTACC=0 は必ず書く
+  return ok;
 }
 
 // 走行中に INA228 の設定が消えていたら、それまでの積算を引き継いで再設定する
