@@ -4,7 +4,18 @@
  *   センサー   : INA228 (Strawberry Linux #11228, シャント 2mΩ, I2C 0x40)
  *   表示       : 秋月 I2C キャラクター液晶 20x4 (ACM2004D-FLW-FBW-IIC, 制御IC RW1063)
  *   記録       : microSD (SPI, CS = D10)
- *   リセット   : D2 - GND 間のボタンを 1 秒長押し → 積算 Wh・経過時間を 0 に、新しいログファイル
+ *
+ * ボタン (D2 - GND)
+ *   1 秒長押し : 積算 Wh・経過時間を 0 にして新しいログファイルを作る
+ *   短く押す   : SD が NO SD のときだけ、SD の再初期化を試す (積算はそのまま)
+ *
+ * レース中の故障に備えた動作
+ *   - Nano だけがリセットされた場合 (ウォッチドッグ・書き込み・リセットボタン等)、
+ *     INA228 の設定が残っていれば積算 Wh を消さずに続きから再開する (経過時間も可能なら復元)
+ *   - 走行中に INA228 の設定が消えた (電源瞬断など) ことを検出したら、再設定して
+ *     それまでの積算値を引き継ぐ
+ *   - LCD をノイズで化けたままにしないよう、5 秒ごとに初期化コマンドを再送する
+ *   - 処理が固まったら 8 秒でウォッチドッグがリセットする
  *
  * 必要なライブラリ: Wire, SPI (標準) / SD
  *   LCD は自作の軽量ドライバ (lcd* 関数) で直接制御する
@@ -12,27 +23,33 @@
  * ピン配置
  *   A4 = SDA, A5 = SCL  (INA228 と LCD で共用。4.7kΩ で 5V へ外付けプルアップ)
  *   D11 = MOSI, D12 = MISO, D13 = SCK, D10 = CS (SD カード)
- *   D2  = 積算リセットボタン (内部プルアップ、押すと LOW)
+ *   D2  = ボタン (内部プルアップ、押すと LOW)
  */
 
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
+#include <avr/wdt.h>
 
 // ============================================================================
 //  ユーザー設定 (ここを変えるだけで調整できる)
 // ============================================================================
-constexpr float    R_SHUNT_OHM     = 0.002f;   // シャント抵抗 [Ω]
+// シャント抵抗 [Ω]。基準の電流計と比べて表示がずれる場合はこの値で校正する
+// (例: 表示が 1% 大きい → 0.002 x 1.01 = 0.00202)。電流・電力・積算すべてに効く
+constexpr float    R_SHUNT_OHM     = 0.002f;
 constexpr float    MAX_CURRENT_A   = 70.0f;    // 想定最大電流 [A] (CURRENT_LSB の計算に使う)
 constexpr uint8_t  INA228_ADDR     = 0x40;     // INA228 の I2C アドレス (A0=A1=GND)
 constexpr uint8_t  LCD_ADDR        = 0x3C;     // ※要確認: 秋月サンプルで照合する (7bit アドレス)
 constexpr uint16_t LCD_INTERVAL_MS = 250;      // LCD 更新間隔 [ms]
+constexpr uint16_t LCD_REINIT_MS   = 5000;     // LCD 初期化コマンドの再送間隔 [ms] (ノイズ対策)
 constexpr uint16_t LOG_INTERVAL_MS = 1000;     // SD 記録間隔 [ms]
 constexpr uint8_t  LOG_FLUSH_EVERY = 5;        // 何行書くごとに flush するか (1 = 毎行)
-constexpr uint16_t RESET_HOLD_MS   = 1000;     // リセットボタンの長押し時間 [ms]
+constexpr uint16_t RESET_HOLD_MS   = 1000;     // 積算リセットの長押し時間 [ms]
+constexpr uint8_t  BTN_SHORT_MIN_MS = 50;      // 短押しと認める最短時間 [ms] (チャタリング除け)
 constexpr uint8_t  PIN_SD_CS       = 10;
-constexpr uint8_t  PIN_RESET_BTN   = 2;
+constexpr uint8_t  PIN_BTN         = 2;
 #define SERIAL_DEBUG 1   // 1: 起動時の I2C スキャン結果と CSV を USB シリアル (115200bps) に出す
+#define USE_WATCHDOG 1   // 1: 8 秒固まったら自動リセット (旧ブートローダの Nano 互換機は下の注意を参照)
 
 // INA228 の ADC 設定 (データシート ADC_CONFIG レジスタ)
 constexpr uint8_t INA_MODE   = 0xB;  // 0xB = シャント電圧 + バス電圧 連続測定
@@ -51,7 +68,7 @@ constexpr uint8_t LCD_CTRL_CMD  = 0x00;
 constexpr uint8_t LCD_CTRL_DATA = 0x40;
 constexpr uint8_t LCD_CMD_CLEAR = 0x01;  // 全消去 (実行に約 1.5ms)
 constexpr uint8_t LCD_CMD_DDRAM = 0x80;  // 0x80 | アドレス で書き込み位置を指定
-// 初期化コマンド列 (順に送る)
+// 初期化コマンド列 (順に送る。表示内容を消さないので走行中の再送にも使う)
 const uint8_t LCD_INIT_SEQ[] PROGMEM = {
   0x38,  // Function set: 8bit, 2 行モード (20x4 は 2 行モードを折り返して使う)
   0x0C,  // Display ON, カーソル OFF, 点滅 OFF
@@ -106,10 +123,15 @@ struct Measurement {
   float voltage;   // [V]
   float current;   // [A]
   float power;     // [W]
-  float energyWh;  // [Wh]
-  bool  ok;        // I2C 読み出し成功
+  float energyWh;  // [Wh] = ENERGY レジスタ + energyOffsetWh
+  bool  ok;        // 直近の読み出しが成功したか
 };
 Measurement meas = {0, 0, 0, 0, false};
+
+// INA228 が走行中に設定を失った (電源瞬断など) ときに、それまでの積算を引き継ぐための値。
+// 積算そのものは INA228 の ENERGY レジスタだけで行い、ソフトでは足し込まない
+float    energyOffsetWh  = 0;
+uint8_t  inaRecoverCount = 0;      // INA228 を再設定した回数 (LCD 3 行目に表示)
 
 bool     sdOk            = false;
 bool     heartbeat       = false;  // 記録するたびに反転 (4 行目末尾の * で動作確認)
@@ -118,9 +140,33 @@ uint8_t  linesSinceFlush = 0;
 uint32_t timerStartMs    = 0;      // 経過時間の基準 (起動時・リセット時)
 uint32_t nextLogMs       = 0;
 uint32_t nextLcdMs       = 0;
+uint32_t lastLcdInitMs   = 0;
 uint32_t btnDownMs       = 0;
 bool     btnDown         = false;
 bool     btnHandled      = false;
+
+// Nano がリセットされても消えない RAM 領域 (.noinit)。電源を切ると中身は不定になるので
+// チェック値で正しさを確かめてから使う
+struct Persist {
+  uint32_t magic;
+  uint32_t elapsedMs;
+  float    energyOffsetWh;
+  uint32_t check;
+};
+Persist persist __attribute__((section(".noinit")));
+constexpr uint32_t PERSIST_MAGIC = 0xE1E1C0DEUL;
+
+// ============================================================================
+//  ウォッチドッグ
+//  注意: 旧ブートローダ (ATmegaBOOT) の Nano 互換機では、ウォッチドッグでリセットされると
+//  再起動を繰り返すことがある (電源を入れ直せば戻る)。固まった状態と比べて悪化はしないが、
+//  気になる場合は USE_WATCHDOG を 0 にするか、Optiboot を書き込む
+// ============================================================================
+inline void wdtKick() {
+#if USE_WATCHDOG
+  wdt_reset();
+#endif
+}
 
 // ============================================================================
 //  I2C スキャン (デバッグ用)
@@ -158,11 +204,17 @@ bool lcdCommand(uint8_t cmd) {
   return ok;
 }
 
-bool lcdInit() {
-  delay(50);  // 電源投入後の待ち
+// 初期化コマンド列を送る (表示内容は消さない)
+bool lcdSendInitSeq() {
   bool ok = true;
   for (uint8_t i = 0; i < sizeof(LCD_INIT_SEQ); i++)
     ok &= lcdCommand(pgm_read_byte(&LCD_INIT_SEQ[i]));
+  return ok;
+}
+
+bool lcdInit() {
+  delay(50);  // 電源投入後の待ち
+  bool ok = lcdSendInitSeq();
   ok &= lcdCommand(LCD_CMD_CLEAR);
   return ok;
 }
@@ -225,42 +277,90 @@ int32_t toSigned20(uint32_t raw24) {
   return (int32_t)(raw24 << 8) >> 12;  // 上位に寄せてから算術シフトで符号拡張
 }
 
+// INA228 がこのスケッチの設定のまま動いているか (電源投入直後は SHUNT_CAL=0 などの既定値)
+enum : uint8_t { INA_CONFIGURED, INA_NOT_CONFIGURED, INA_NO_RESPONSE };
+uint8_t inaCheckConfig() {  // 戻り値は上の INA_* のどれか
+  uint16_t cal, adc, cfg;
+  if (!inaRead16(REG_SHUNT_CAL, cal) || !inaRead16(REG_ADC_CONFIG, adc) ||
+      !inaRead16(REG_CONFIG, cfg))
+    return INA_NO_RESPONSE;
+  bool same = (cal == SHUNT_CAL) && (adc == ADC_CONFIG_VALUE) &&
+              ((cfg & ~(CONFIG_RST | CONFIG_RSTACC)) == CONFIG_VALUE);
+  return same ? INA_CONFIGURED : INA_NOT_CONFIGURED;
+}
+
+// 全レジスタを初期化してから設定する (ENERGY も 0 になる)
 bool inaConfigure() {
-  if (!inaWrite16(REG_CONFIG, CONFIG_RST)) return false;  // 全レジスタ初期化
+  if (!inaWrite16(REG_CONFIG, CONFIG_RST)) return false;
   delay(2);
   if (!inaWrite16(REG_CONFIG, CONFIG_VALUE)) return false;
   if (!inaWrite16(REG_ADC_CONFIG, ADC_CONFIG_VALUE)) return false;
   if (!inaWrite16(REG_SHUNT_CAL, SHUNT_CAL)) return false;
-  uint16_t chk;  // 書けたか読み戻して確認
-  if (!inaRead16(REG_SHUNT_CAL, chk) || chk != SHUNT_CAL) return false;
-  if (!inaRead16(REG_ADC_CONFIG, chk) || chk != ADC_CONFIG_VALUE) return false;
-  return true;
+  return inaCheckConfig() == INA_CONFIGURED;  // 書けたか読み戻して確認
 }
 
 bool inaResetEnergy() {
   return inaWrite16(REG_CONFIG, CONFIG_VALUE | CONFIG_RSTACC);
 }
 
-// 電圧・電流・電力・積算をまとめて読む
+// 走行中に INA228 の設定が消えていたら、それまでの積算を引き継いで再設定する
+void inaRecover() {
+  // 最後に正しく読めた積算値 (積算は減らないので、起動直後で未測定でも大きい方を残す)
+  if (meas.energyWh > energyOffsetWh) energyOffsetWh = meas.energyWh;
+  bool ok = inaConfigure();
+  if (inaRecoverCount < 9) inaRecoverCount++;
+#if SERIAL_DEBUG
+  Serial.print(F("# INA228 re-configured, ok="));
+  Serial.println(ok);
+#else
+  (void)ok;
+#endif
+}
+
+// 電圧・電流・電力・積算をまとめて読む。
+// 読み出しの前後で SHUNT_CAL を確かめ、途中で INA228 がリセットされた値は採用しない
 bool inaMeasure(Measurement &m) {
-  uint32_t raw;
+  uint16_t cal;
+  uint32_t rv, ri, rp;
   uint8_t e[5];
 
-  if (!inaRead24(REG_VBUS, raw)) return m.ok = false;
-  m.voltage = toSigned20(raw) * VBUS_LSB_V;
+  if (!inaRead16(REG_SHUNT_CAL, cal)) return m.ok = false;
+  if (cal != SHUNT_CAL) {           // 設定が消えている (電源瞬断など)
+    inaRecover();
+    return m.ok = false;            // 今回は値を使わない (次回から正常に読める)
+  }
+  if (!inaRead24(REG_VBUS, rv) || !inaRead24(REG_CURRENT, ri) ||
+      !inaRead24(REG_POWER, rp) || !inaRead(REG_ENERGY, e, 5))
+    return m.ok = false;
+  if (!inaRead16(REG_SHUNT_CAL, cal) || cal != SHUNT_CAL) return m.ok = false;
 
-  if (!inaRead24(REG_CURRENT, raw)) return m.ok = false;
-  m.current = toSigned20(raw) * CURRENT_LSB;
-
-  if (!inaRead24(REG_POWER, raw)) return m.ok = false;
-  m.power = raw * POWER_LSB_W;  // 24bit 全部が値 (符号なし)
-
-  if (!inaRead(REG_ENERGY, e, 5)) return m.ok = false;  // 40bit 符号なし
+  m.voltage = toSigned20(rv) * VBUS_LSB_V;
+  m.current = toSigned20(ri) * CURRENT_LSB;
+  m.power   = rp * POWER_LSB_W;     // 24bit 全部が値 (符号なし)
   uint32_t lo = ((uint32_t)e[1] << 24) | ((uint32_t)e[2] << 16) |
-                ((uint32_t)e[3] << 8) | e[4];
-  m.energyWh = ((float)e[0] * 4294967296.0f + (float)lo) * ENERGY_LSB_WH;
-
+                ((uint32_t)e[3] << 8) | e[4];        // 40bit 符号なし
+  m.energyWh = ((float)e[0] * 4294967296.0f + (float)lo) * ENERGY_LSB_WH + energyOffsetWh;
   return m.ok = true;
+}
+
+// ============================================================================
+//  リセットされても消えない値 (経過時間・積算オフセット)
+// ============================================================================
+uint32_t persistCheckValue(const Persist &p) {
+  uint32_t off;
+  memcpy(&off, &p.energyOffsetWh, sizeof(off));
+  return p.magic ^ p.elapsedMs ^ off ^ 0x5A5AA5A5UL;
+}
+
+void persistSave(uint32_t now) {
+  persist.magic = PERSIST_MAGIC;
+  persist.elapsedMs = now - timerStartMs;
+  persist.energyOffsetWh = energyOffsetWh;
+  persist.check = persistCheckValue(persist);
+}
+
+bool persistValid() {
+  return persist.magic == PERSIST_MAGIC && persist.check == persistCheckValue(persist);
 }
 
 // ============================================================================
@@ -289,16 +389,19 @@ void lcdShowMeasurement(uint32_t now) {
   }
 
   // 3行目: 経過時間 (リセットから) "TIME  12:34"  (100 分以上は "123:45")
+  //        INA228 を再設定したことがあれば末尾に "INA!回数" を出す
   uint32_t s = (now - timerStartMs) / 1000;
-  snprintf_P(line, sizeof(line), PSTR("TIME  %02lu:%02u"), s / 60, (unsigned)(s % 60));
+  int n = snprintf_P(line, sizeof(line), PSTR("TIME  %02lu:%02u"), s / 60, (unsigned)(s % 60));
+  if (inaRecoverCount && n > 0 && n < 14)
+    snprintf_P(line + n, sizeof(line) - n, PSTR("   INA!%u"), inaRecoverCount);
   lcdLine(2, line);
 
-  // 4行目: SD 状態 "REC LOG003.CSV     *" / "NO SD  (HOLD=RETRY)"
+  // 4行目: SD 状態 "REC LOG003.CSV     *" / "NO SD  (PUSH=RETRY)"
   if (sdOk) {
     snprintf_P(line, sizeof(line), PSTR("REC %-15s%c"), logName, heartbeat ? '*' : ' ');
     lcdLine(3, line);
   } else {
-    lcdLineP(3, F("NO SD  (HOLD=RETRY)"));
+    lcdLineP(3, F("NO SD  (PUSH=RETRY)"));
   }
 }
 
@@ -327,10 +430,12 @@ bool openNewLog() {
   return false;  // 1000 ファイル使い切り
 }
 
-// SD を (再) 初期化してログを開く
+// SD を (再) 初期化してログを開く。カードが無いと最大 2 秒ほどかかる
 void startSdLog() {
   if (logFile) logFile.close();
+  wdtKick();
   sdOk = SD.begin(PIN_SD_CS) && openNewLog();
+  wdtKick();
   if (!sdOk) logName[0] = '\0';
 #if SERIAL_DEBUG
   Serial.print(F("SD: "));
@@ -366,16 +471,21 @@ void writeLog(uint32_t now) {
 }
 
 // ============================================================================
-//  リセット (積算 Wh・経過時間を 0、新しいログ)
+//  ボタン操作
 // ============================================================================
-void restartTimer() {
-  timerStartMs = millis();
-  nextLogMs = timerStartMs + LOG_INTERVAL_MS;
-  nextLcdMs = timerStartMs;
+void restartTimer(uint32_t elapsedMs) {
+  uint32_t now = millis();
+  timerStartMs = now - elapsedMs;
+  nextLogMs = now + LOG_INTERVAL_MS;
+  nextLcdMs = now;
 }
 
+// 長押し: 積算 Wh・経過時間を 0 にして新しいログ
 void doEnergyReset() {
   bool ok = inaResetEnergy();
+  energyOffsetWh = 0;
+  inaRecoverCount = 0;
+  meas.energyWh = 0;
   lcdLineP(0, ok ? F("ENERGY RESET") : F("RESET FAILED"));
   lcdLineP(1, F(""));
   lcdLineP(2, F(""));
@@ -385,30 +495,48 @@ void doEnergyReset() {
   Serial.println(F("# energy reset"));
 #endif
   delay(800);    // メッセージ表示
-  restartTimer();
+  restartTimer(0);
+  persistSave(millis());
+}
+
+// 短押し (NO SD のときだけ): 積算と経過時間はそのままで SD を再初期化
+void doSdRetry() {
+  lcdLineP(3, F("SD RETRY ..."));
+  startSdLog();
+  nextLcdMs = millis();
 }
 
 void handleButton(uint32_t now) {
-  bool pressed = (digitalRead(PIN_RESET_BTN) == LOW);
-  if (!pressed) {
-    btnDown = false;
-    btnHandled = false;
+  bool pressed = (digitalRead(PIN_BTN) == LOW);
+  if (pressed) {
+    if (!btnDown) {          // 押し始め (チャタリングで離れたらタイマーはやり直し)
+      btnDown = true;
+      btnDownMs = now;
+    } else if (!btnHandled && now - btnDownMs >= RESET_HOLD_MS) {
+      btnHandled = true;     // 離すまで再実行しない
+      doEnergyReset();
+    }
     return;
   }
-  if (!btnDown) {          // 押し始め (チャタリングで離れたらタイマーはやり直し)
-    btnDown = true;
-    btnDownMs = now;
-  } else if (!btnHandled && now - btnDownMs >= RESET_HOLD_MS) {
-    btnHandled = true;     // 離すまで再実行しない
-    doEnergyReset();
-  }
+  // 離したとき: 長押しに届かなかった短押しなら SD 再試行
+  if (btnDown && !btnHandled && !sdOk && now - btnDownMs >= BTN_SHORT_MIN_MS)
+    doSdRetry();
+  btnDown = false;
+  btnHandled = false;
 }
 
 // ============================================================================
 //  setup / loop
 // ============================================================================
+void haltWithMessage() {
+  while (true) wdtKick();  // 仕様どおり停止 (ウォッチドッグでの再起動もしない)
+}
+
 void setup() {
-  pinMode(PIN_RESET_BTN, INPUT_PULLUP);
+#if USE_WATCHDOG
+  wdt_enable(WDTO_8S);
+#endif
+  pinMode(PIN_BTN, INPUT_PULLUP);
 #if SERIAL_DEBUG
   Serial.begin(115200);
   Serial.println(F("Ene-1 PowerMeter"));
@@ -427,6 +555,7 @@ void setup() {
 #else
   (void)lcdOk;
 #endif
+  lastLcdInitMs = millis();
   lcdLineP(0, F("Ene-1 PowerMeter"));
   lcdLineP(1, F("starting..."));
 
@@ -442,31 +571,50 @@ void setup() {
 #if SERIAL_DEBUG
     Serial.println(F("INA228 not found"));
 #endif
-    while (true) {}  // 停止
+    haltWithMessage();
   }
-  if (!inaConfigure()) {
-    lcdLineP(0, F("INA228 CONFIG ERROR"));
-    lcdLineP(3, F("STOPPED"));
+
+  // INA228 の設定が残っている = INA228 は電源が切れておらず Nano だけがリセットされた。
+  // このときは積算 Wh を消さずに続きから再開する
+  uint32_t resumeElapsedMs = 0;
+  bool resumed = (inaCheckConfig() == INA_CONFIGURED);
+  if (resumed) {
+    if (persistValid()) {
+      resumeElapsedMs = persist.elapsedMs;
+      energyOffsetWh = persist.energyOffsetWh;
+    }
+    lcdLineP(1, F("RESUMED (Wh KEPT)"));
+  } else {
+    if (!inaConfigure()) {
+      lcdLineP(0, F("INA228 CONFIG ERROR"));
+      lcdLineP(3, F("STOPPED"));
 #if SERIAL_DEBUG
-    Serial.println(F("INA228 config error"));
+      Serial.println(F("INA228 config error"));
 #endif
-    while (true) {}
+      haltWithMessage();
+    }
+    lcdLineP(1, F("INA228 OK"));
   }
-  lcdLineP(1, F("INA228 OK"));
+#if SERIAL_DEBUG
+  Serial.print(F("INA228: "));
+  Serial.println(resumed ? F("resumed (energy kept)") : F("configured"));
+  Serial.print(F("SHUNT_CAL=")); Serial.println(SHUNT_CAL);
+#endif
 
   startSdLog();
   lcdLineP(2, sdOk ? F("SD OK") : F("NO SD"));
   if (sdOk) lcdLine(3, logName);
 #if SERIAL_DEBUG
-  Serial.print(F("SHUNT_CAL=")); Serial.println(SHUNT_CAL);
   Serial.println(F("time_s,voltage_V,current_A,power_W,energy_Wh"));
 #endif
   delay(1500);
 
-  restartTimer();
+  restartTimer(resumeElapsedMs);
+  persistSave(millis());
 }
 
 void loop() {
+  wdtKick();
   uint32_t now = millis();
 
   handleButton(now);
@@ -474,8 +622,13 @@ void loop() {
   if ((int32_t)(now - nextLcdMs) >= 0) {
     nextLcdMs += LCD_INTERVAL_MS;
     if ((int32_t)(now - nextLcdMs) >= 0) nextLcdMs = now + LCD_INTERVAL_MS;  // 遅れたら追いつかない
+    if (now - lastLcdInitMs >= LCD_REINIT_MS) {  // ノイズで化けた LCD を立て直す
+      lcdSendInitSeq();
+      lastLcdInitMs = now;
+    }
     inaMeasure(meas);
     lcdShowMeasurement(now);
+    persistSave(now);
   }
 
   if ((int32_t)(now - nextLogMs) >= 0) {
