@@ -9,6 +9,7 @@
 #include "Arduino.h"
 #include "Wire.h"
 #include "SD.h"
+#include "SPI.h"
 #include <vector>
 #include <sstream>
 #include <iostream>
@@ -21,6 +22,7 @@ uint64_t g_us = 0;
 HardwareSerial Serial;
 TwoWire Wire;
 SDClass SD;
+SPIClass SPI;
 bool g_sdCardPresent = true;
 std::string g_sdDir;
 int g_sdFlushCount = 0;

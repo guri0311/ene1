@@ -46,7 +46,9 @@ SD カードの初期化は起動時だけ行う。走行中に `NO SD` にな�
 - **Nano だけがリセットされたとき**（ウォッチドッグ、スケッチの書き込み、Nano のリセットボタンなど）は、INA228 に設定が残っていれば積算 mAh を消さずに再開する。経過時間も、リセットで消えない RAM 領域（`.noinit`）から復元する。新しいログファイルは作るが、時刻は続きから記録する。
 - **走行中に INA228 の設定が消えたとき**（電源の瞬断など）は、それを検出して設定し直し、それまでの積算値を引き継ぐ。3 行目に `INA!回数` を表示する。
 - **LCD がノイズで化けたとき**に備え、5 秒ごとに初期化コマンドを再送する（表示は消さない）。
-- **処理が固まったとき**は、8 秒でウォッチドッグが Nano をリセットする（`USE_WATCHDOG`）。旧ブートローダの Nano 互換機では、ウォッチドッグでのリセット後に再起動を繰り返すことがある。
+- **SD カードが抜けたとき**は、5 行ごとの書き込み確定のあとにカードの状態を確かめ（CMD13、初期化はしない）、約 2 秒で `NO SD` にする。
+- **I2C がノイズで固まったとき**は、Wire のタイムアウト（3ms）で復帰する。
+- **処理が固まったとき**は、8 秒でウォッチドッグが Nano をリセットし、積算を引き継いで再開する（`USE_WATCHDOG`）。Optiboot の Nano（Arduino IDE で「ATmega328P」を選んで書き込める Nano）ではそのまま再開する。旧ブートローダの Nano（「ATmega328P (Old Bootloader)」）では再起動を繰り返して表示が止まるので、Optiboot を書き込むか `USE_WATCHDOG 0` にする。
 - **SD にログが大量にたまっても**、空き番号を二分探索で探すので起動は遅くならない。
 
 動かないときは [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) を参照。
@@ -73,9 +75,25 @@ arduino-cli lib install SD
 arduino-cli compile --fqbn arduino:avr:nano Ene1PowerMeter
 ```
 
-## テスト（PC 上のシミュレーション）
+## テスト
 
-INA228 と LCD（RW1063）をデータシートどおりにモデル化し、スケッチを PC 上で動かして確認する。
+### 実機バイナリのエミュレーターテスト（test/avr_emu）
+
+実機に書き込むのと同じ .hex を ATmega328P エミュレーター（[avr8js](https://github.com/wokwi/avr8js)）で動かす。I2C には INA228 と LCD（RW1063）のモデル、SPI には FAT32 イメージを持つ SD カードのモデルをつなぎ、Optiboot・旧ブートローダも一緒に動かして確認する。CSV はイメージから読み出し、FAT の整合性は `fsck.fat` で確かめる。
+
+必要なもの: Node.js、arduino-cli（arduino:avr コアと SD ライブラリ）、dosfstools、mtools
+
+```bash
+cd test/avr_emu && npm install
+```
+
+```bash
+cd test/avr_emu && node run.mjs
+```
+
+### PC 上のシミュレーション（test/host_sim）
+
+スケッチを PC 用にコンパイルし、INA228・LCD・SD を模擬して動かす。速く、メモリ破壊・未定義動作の検査（`SIM_SANITIZE=1`）もできる。
 
 ```bash
 bash test/host_sim/run_tests.sh

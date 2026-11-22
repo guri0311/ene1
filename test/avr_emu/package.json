@@ -1,0 +1,12 @@
+{
+  "name": "ene1-avr-emu",
+  "private": true,
+  "description": "Ene1PowerMeter の実機バイナリを ATmega328P エミュレーター (avr8js) で動かすテスト",
+  "type": "module",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "dependencies": {
+    "avr8js": "0.21.1"
+  }
+}

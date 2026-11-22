@@ -4,3 +4,6 @@ build/
 *.elf
 *.bin
 .vscode/
+
+# エミュレーターテストの依存パッケージ
+node_modules/

@@ -17,7 +17,14 @@
  *   - 走行中に INA228 の設定が消えた (電源瞬断など) ことを検出したら、再設定して
  *     それまでの積算値を引き継ぐ
  *   - LCD をノイズで化けたままにしないよう、5 秒ごとに初期化コマンドを再送する
+ *   - SD カードが抜けたら、flush のたびの状態確認 (CMD13) で数秒以内に NO SD にする
+ *   - I2C がノイズで固まっても Wire のタイムアウト (3ms) で復帰する
  *   - 処理が固まったら 8 秒でウォッチドッグがリセットする
+ *     (Optiboot の Nano はそのまま再開する。旧ブートローダの Nano は再起動を繰り返すので、
+ *      Optiboot を書き込むか USE_WATCHDOG を 0 にする)
+ *
+ * 動作確認: test/host_sim (PC 上のシミュレーション) と test/avr_emu (実機バイナリを
+ *           ATmega328P エミュレーターで動かすテスト)
  *
  * 必要なライブラリ: Wire, SPI (標準) / SD
  *   LCD は自作の軽量ドライバ (lcd* 関数) で直接制御する
@@ -530,14 +537,35 @@ void printCsvRow(Print &out, uint32_t elapsedMs) {
   out.println(dtostrf(meas.chargemAh, 1, 1, buf));
 }
 
+// SD カードがまだ応答するかを CMD13 (SEND_STATUS) で確かめる。カードの初期化はしない。
+// SD ライブラリの flush() は書き込みに失敗しても知らせないので、抜けたことに気づくのが
+// 512 バイト書き進んだとき (十数秒後) まで遅れる。これを flush のたびの確認で数秒以内にする。
+// 抜けたカードは応答せず (0xFF のまま)、挿し直したカードは未初期化なので R1 が 0 にならない
+bool sdCardResponds() {
+  SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
+  digitalWrite(PIN_SD_CS, LOW);
+  SPI.transfer(0xFF);
+  const uint8_t cmd13[6] = {0x40 | 13, 0, 0, 0, 0, 0xFF};
+  for (uint8_t i = 0; i < 6; i++) SPI.transfer(cmd13[i]);
+  uint8_t r1 = 0xFF;
+  for (uint8_t i = 0; i < 10 && (r1 & 0x80); i++) r1 = SPI.transfer(0xFF);  // R1 を待つ
+  SPI.transfer(0xFF);  // R2
+  digitalWrite(PIN_SD_CS, HIGH);
+  SPI.transfer(0xFF);
+  SPI.endTransaction();
+  return r1 == 0x00;
+}
+
 void writeLog(uint32_t now) {
   if (!meas.ok) return;  // センサー読み取り失敗時は行を書かない
   printCsvRow(logFile, now - timerStartMs);
+  bool cardLost = false;
   if (++linesSinceFlush >= LOG_FLUSH_EVERY) {
     logFile.flush();  // ディレクトリ情報まで書き込み → 電源断でもここまでは残る
     linesSinceFlush = 0;
+    cardLost = !sdCardResponds();
   }
-  if (logFile.getWriteError()) {  // カード抜け等
+  if (cardLost || logFile.getWriteError()) {  // カード抜け等
     logFile.close();
     sdOk = false;
     logName[0] = '\0';
