@@ -47,8 +47,9 @@ expect_lcd 1 "P: 240W  Q:  1000mAh"
 expect_lcd 2 "TIME  06:02"
 expect_charge 998 1002
 expect_last LOG000.CSV ",24.000,10.000,240.00,"
-# 5 行ごとに flush するので、最後の数行はまだカードに書かれていない
-expect_lines LOG000.CSV 357 364
+# 50ms ごと (1 秒に 20 行) に 362 秒 → 見出しを含めて約 7241 行。
+# 1 秒ごとに flush するので、最後の最大 20 行はまだカードに書かれていないことがある
+expect_lines LOG000.CSV 7215 7245
 expect_clean
 
 say "2. 逆向きの電流 (回生 -2A を 3 分 → 100mAh 減る)"
@@ -82,7 +83,8 @@ expect_lcd 2 "TIME  00:00"
 expect_lcd 3 "REC LOG001.CSV"
 expect_last LOG001.CSV "charge_mAh"
 run 6000
-expect_last LOG001.CSV "5.0,"
+# リセットで時刻が 0 から数え直されている (1 秒ごとに確定するので最終行は 6 秒の行)
+expect_last LOG001.CSV "6.000,"
 say "4b. リセットのあとも積算が再開する (RSTACC が 1 のまま残ると 0 で止まる)"
 i 10
 run 36000

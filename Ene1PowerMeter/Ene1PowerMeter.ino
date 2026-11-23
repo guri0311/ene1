@@ -53,8 +53,14 @@ constexpr uint8_t  INA228_ADDR     = 0x40;     // INA228 の I2C アドレス (A
 constexpr uint8_t  LCD_ADDR        = 0x3C;     // LCD の I2C アドレス (応答がなければ 0x3C〜0x3F から自動で探す)
 constexpr uint16_t LCD_INTERVAL_MS = 250;      // LCD 更新間隔 [ms]
 constexpr uint16_t LCD_REINIT_MS   = 5000;     // LCD 初期化コマンドの再送間隔 [ms] (ノイズ対策)
-constexpr uint16_t LOG_INTERVAL_MS = 1000;     // SD 記録間隔 [ms]
-constexpr uint8_t  LOG_FLUSH_EVERY = 5;        // 何行書くごとに flush するか (1 = 毎行)
+// SD 記録間隔 [ms]。50ms = 1 秒に 20 行。
+//   - INA228 の更新周期 (INA_CONV_PERIOD_US、下の ADC 設定で約 18ms) より短くしても同じ値が
+//     並ぶだけなので、それ以上にする (static_assert で確かめる)
+//   - 20ms にすると LCD 更新などの処理が間に合わず、刻みが 10〜30ms にばらつく (エミュレーターで実測)
+//   - 100ms 以上にするなら INA_AVG を 3 (64 回) に戻すと、1 行ごとの値のばらつきが小さくなる
+constexpr uint16_t LOG_INTERVAL_MS = 50;
+// SD への書き込みを確定 (flush) する間隔 [ms]。電源が落ちたとき、最大でこの時間ぶんの行が残らない
+constexpr uint16_t LOG_FLUSH_MS    = 1000;
 constexpr uint16_t RESET_HOLD_MS   = 3000;     // 積算リセットの長押し時間 [ms]
 constexpr uint16_t BTN_STUCK_MS    = 10000;    // これ以上押されたままなら故障 (ショート) とみなす [ms]
 constexpr uint8_t  PIN_SD_CS       = 10;
@@ -64,10 +70,11 @@ constexpr uint8_t  PIN_BTN         = 2;
 
 // INA228 の ADC 設定 (データシート ADC_CONFIG レジスタ)
 constexpr uint8_t INA_MODE   = 0xB;  // 0xB = シャント電圧 + バス電圧 連続測定
-constexpr uint8_t INA_VBUSCT = 5;    // バス電圧 変換時間 5 = 1052us
-constexpr uint8_t INA_VSHCT  = 5;    // シャント電圧 変換時間 5 = 1052us
+constexpr uint8_t INA_VBUSCT = 1;    // バス電圧 変換時間 1 = 84us (電圧はゆっくり変わるので短くてよい)
+constexpr uint8_t INA_VSHCT  = 5;    // シャント電圧 変換時間 5 = 1052us (電流の精度を保つため長め)
 constexpr uint8_t INA_VTCT   = 5;    // 温度 変換時間 (MODE=0xB では未使用)
-constexpr uint8_t INA_AVG    = 3;    // 平均回数 3 = 64 回 → (1052+1052)us x 64 ≒ 135ms ごとに更新
+constexpr uint8_t INA_AVG    = 2;    // 平均回数 2 = 16 回 → (84+1052)us x 16 ≒ 18ms ごとに更新
+                                     // (積算 mAh は平均回数に関係なく、すべての変換結果を INA228 が足し込む)
 // シャント電圧の測定範囲。1 = ±40.96mV (ローレンジ、分解能 4 倍)、0 = ±163.84mV
 // 10A ブレーカの後ろで使うので、2mΩ で 20.48A まで測れるローレンジにしている
 constexpr uint8_t INA_ADCRANGE = 1;
@@ -136,6 +143,17 @@ constexpr float VBUS_LSB_V    = 195.3125e-6f;                         // バス�
 constexpr float POWER_LSB_W   = 3.2f * CURRENT_LSB;                    // 電力 LSB
 constexpr float CHARGE_LSB_MAH = CURRENT_LSB / 3.6f;                   // 電荷 LSB [C]→[mAh]
 
+// INA228 の測定値が更新される周期 [us] (データシート ADC_CONFIG の変換時間と平均回数)
+constexpr uint16_t INA_CT_US[8]  = {50, 84, 150, 280, 540, 1052, 2074, 4120};
+constexpr uint16_t INA_AVG_N[8]  = {1, 4, 16, 64, 128, 256, 512, 1024};
+constexpr uint32_t INA_CONV_PERIOD_US =
+    ((uint32_t)INA_CT_US[INA_VBUSCT] + INA_CT_US[INA_VSHCT]) * INA_AVG_N[INA_AVG];
+static_assert(INA_MODE == 0xB, "INA_CONV_PERIOD_US はシャント + バス電圧の連続測定 (MODE=0xB) を前提にしている");
+static_assert((uint32_t)LOG_INTERVAL_MS * 1000UL >= INA_CONV_PERIOD_US,
+              "LOG_INTERVAL_MS が INA228 の更新周期より短い (同じ値が並ぶだけ)。INA_AVG か変換時間を小さくする");
+// flush する行数 (LOG_FLUSH_MS ごと)
+constexpr uint16_t LOG_FLUSH_EVERY = LOG_FLUSH_MS / LOG_INTERVAL_MS ? LOG_FLUSH_MS / LOG_INTERVAL_MS : 1;
+
 // ============================================================================
 //  グローバル
 // ============================================================================
@@ -159,7 +177,7 @@ uint8_t  inaRecoverCount = 0;      // INA228 を再設定した回数 (LCD 3 行
 
 bool     sdOk            = false;
 bool     heartbeat       = false;  // 記録するたびに反転 (4 行目末尾の * で動作確認)
-uint8_t  linesSinceFlush = 0;
+uint16_t linesSinceFlush = 0;
 uint32_t timerStartMs    = 0;      // 経過時間の基準 (起動時・リセット時)
 uint32_t nextLogMs       = 0;
 uint32_t nextLcdMs       = 0;
@@ -529,16 +547,16 @@ void sdNextFile() {
   printSdStatus();
 }
 
-// 1 行出力: 経過時間[s], 電圧[V], 電流[A], 電力[W], 積算[mAh]
+// 1 行出力: 経過時間[s] (ミリ秒まで), 電圧[V], 電流[A], 電力[W], 積算[mAh]
 void printCsvRow(Print &out, uint32_t elapsedMs) {
   char buf[16];
-  snprintf_P(buf, sizeof(buf), PSTR("%lu.%u,"), elapsedMs / 1000,
-             (unsigned)((elapsedMs % 1000) / 100));
+  snprintf_P(buf, sizeof(buf), PSTR("%lu.%03u,"), elapsedMs / 1000,
+             (unsigned)(elapsedMs % 1000));
   out.print(buf);
   out.print(dtostrf(meas.voltage, 1, 3, buf));  out.print(',');
   out.print(dtostrf(meas.current, 1, 3, buf));  out.print(',');
   out.print(dtostrf(meas.power, 1, 2, buf));    out.print(',');
-  out.println(dtostrf(meas.chargemAh, 1, 1, buf));
+  out.println(dtostrf(meas.chargemAh, 1, 2, buf));
 }
 
 // SD カードがまだ応答するかを CMD13 (SEND_STATUS) で確かめる。カードの初期化はしない。
@@ -760,13 +778,14 @@ void loop() {
       lcdResendSettings();
       lastLcdInitMs = now;
     }
-    inaMeasure(meas);
+    // 記録のほうが頻繁なら、記録のときに読んだ最新値を表示する (I2C の読み出しを減らす)
+    if (LOG_INTERVAL_MS > LCD_INTERVAL_MS) inaMeasure(meas);
     lcdShowMeasurement(now);
     persistSave(now);
   }
 
   if ((int32_t)(now - nextLogMs) >= 0) {
-    nextLogMs += LOG_INTERVAL_MS;    // 1 秒刻みを保つ (ずれが溜まらない)
+    nextLogMs += LOG_INTERVAL_MS;    // 一定の刻みを保つ (ずれが溜まらない)
     if ((int32_t)(now - nextLogMs) >= 0) nextLogMs = now + LOG_INTERVAL_MS;
     inaMeasure(meas);                // 記録用に最新値を読む
     if (sdOk) writeLog(now);
