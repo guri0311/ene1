@@ -68,8 +68,9 @@ for (const { st, r } of results) {
   const dir = path.join(opt.out, st.key);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'LOG000.CSV'), S.toCsv(r));
+  fs.writeFileSync(path.join(dir, 'detail.csv'), S.toDetailCsv(r));
 }
-console.log(`\nCSV: ${path.relative(process.cwd(), opt.out)}/<走り方>/LOG000.CSV (ログビューアで開ける)`);
+console.log(`\nCSV: ${path.relative(process.cwd(), opt.out)}/<走り方>/LOG000.CSV (電力計と同じ形。ログビューアで開ける)、detail.csv (速さ・区間・標高・ブレーカーの熱などを足した表)`);
 
 // ---------------------------------------------------------------------------
 //  ファームウェアに流す

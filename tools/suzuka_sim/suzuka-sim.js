@@ -260,7 +260,8 @@
   function simulate(params) {
     const p = Object.assign({}, DEFAULTS, params || {});
     const bat = battery(p);
-    const rec = { t: [], d: [], v: [], elev: [], i: [], volt: [], q: [], section: [], heat: [], im: [] };
+    const rec = { t: [], d: [], v: [], elev: [], i: [], volt: [], q: [], section: [], heat: [], im: [], attack: [], phase: [] };
+    let curAttack = 1, phase = '走行';
     const attacks = [], events = [], brakeBySection = {};
     const loss = { aero: 0, roll: 0, brake: 0, battery: 0, motor: 0, chain: 0, ctrl: 0, climb: 0 };
     let t = 0, usedAh = 0, dnf = null, heat = 0, tripped = false, trips = 0;
@@ -268,7 +269,7 @@
     const record = (dAbs, v, i, volt, im) => {
       rec.t.push(+t.toFixed(3)); rec.d.push(dAbs); rec.v.push(v); rec.elev.push(elevationAt(dAbs));
       rec.i.push(i); rec.volt.push(volt); rec.q.push(usedAh * 1000); rec.section.push(sectionAt(dAbs));
-      rec.heat.push(heat / p.breakerHeatS); rec.im.push(im);
+      rec.heat.push(heat / p.breakerHeatS); rec.im.push(im); rec.attack.push(curAttack); rec.phase.push(phase);
     };
     const breakerStep = (i) => {
       const x = (i / p.breakerA) ** 2 - 1;
@@ -280,6 +281,7 @@
     };
 
     for (let a = 0; a < p.attacks && !dnf; a++) {
+      curAttack = a + 1; phase = '走行';
       let d = 0, v = p.flyingStartKmh / 3.6, stuck = 0, peakA = 0, minV = Infinity;
       const t0 = t, q0 = usedAh;
       while (d < LAP_M) {
@@ -294,7 +296,9 @@
           // ブレーカーが切れた: 惰性で止まり、冷えるのを待って入れ直す
           if (v < 0.05) {
             events.push({ t, attack: a + 1, d, section: sectionAt(d), kind: 'reset' });
+            phase = 'ブレーカー復帰待ち';
             for (let s = 0; s < p.breakerResetS; s += dt) { t += dt; heat = Math.max(0, heat - p.breakerHeatS / p.breakerCoolS * dt); record(a * LAP_M + d, 0, 0, bat.ocv(usedAh), 0); }
+            phase = '走行';
             tripped = false; heat = 0;
             continue;
           }
@@ -343,7 +347,9 @@
       });
       if (dnf) break;
       // ゴール後: ブレーキで止まって待つ
+      phase = 'ゴール後';
       while (v > 0) { v = Math.max(0, v - 1.5 * dt); d += v * dt; t += dt; breakerStep(0); record(a * LAP_M + Math.min(d, LAP_M + 200), v, 0, bat.ocv(usedAh), 0); }
+      phase = 'アタックの間';
       if (a < p.attacks - 1) idle(p.waitS, (a + 1) * LAP_M);
     }
     const toWh = (j) => j / 3600;
@@ -443,8 +449,27 @@
     return out.join('\n') + '\n';
   }
 
+  // 詳しい CSV (表計算ソフト用)。電力計の列に、シミュレーションだけにある値を足す。
+  // Excel で日本語が化けないよう、先頭に BOM を付ける
+  function toDetailCsv(result) {
+    const r = result.rec;
+    const head = ['time_s', 'attack', 'phase', 'lap_distance_m', 'section', 'elevation_m', 'grade_pct', 'speed_kmh',
+      'voltage_V', 'current_A', 'power_W', 'charge_mAh', 'motor_current_A', 'breaker_heat_pct'];
+    const out = ['\ufeff' + head.join(',')];
+    for (let k = 0; k < r.t.length; k++) {
+      const lapD = Math.max(0, Math.min(r.d[k] - (r.attack[k] - 1) * LAP_M, LAP_M));
+      const running = r.phase[k] === '走行';
+      out.push([
+        r.t[k].toFixed(3), r.attack[k], r.phase[k], lapD.toFixed(1), r.section[k], r.elev[k].toFixed(2),
+        running ? (gradeAt(r.d[k]) * 100).toFixed(2) : '', (r.v[k] * 3.6).toFixed(2), r.volt[k].toFixed(3),
+        r.i[k].toFixed(3), (r.volt[k] * r.i[k]).toFixed(2), r.q[k].toFixed(2), r.im[k].toFixed(2), (r.heat[k] * 100).toFixed(1),
+      ].join(','));
+    }
+    return out.join('\n') + '\n';
+  }
+
   return {
     LAP_M, ELEVATION, SECTIONS, CORNERS, MOTOR, DEFAULTS, elevationAt, gradeAt, sectionAt, speedLimit, cornerKmh,
-    motorAt24V, simulate, findCruise, forLapTime, maxCdAFor, optimizeBoost, strategies, toCsv,
+    motorAt24V, simulate, findCruise, forLapTime, maxCdAFor, optimizeBoost, strategies, toCsv, toDetailCsv,
   };
 });
