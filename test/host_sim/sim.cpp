@@ -274,6 +274,7 @@ static bool loadState(const char *path) {
 // ---------------------------------------------------------------------------
 //  シナリオ実行
 // ---------------------------------------------------------------------------
+static uint64_t g_markUs = 0;
 static void runFor(uint64_t ms) {
   uint64_t end = g_us + ms * 1000;
   while (g_us < end) {
@@ -366,6 +367,11 @@ int main(int argc, char **argv) {
       g_inSetup = false;
     }
     else if (cmd == "run") runFor((uint64_t)num(is));
+    else if (cmd == "mark") g_markUs = g_us;  // run_to の基準の時刻
+    else if (cmd == "run_to") {               // mark から ms 後まで進める (run を繰り返すとずれがたまるので、長い走行に使う)
+      uint64_t end = g_markUs + (uint64_t)(num(is) * 1000);
+      if (end > g_us) runFor((end - g_us + 999) / 1000);
+    }
     else if (cmd == "press") {
       uint64_t ms = (uint64_t)num(is);
       g_button = true; runFor(ms); g_button = false; runFor(60);

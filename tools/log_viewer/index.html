@@ -302,6 +302,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     </div>
     <label class="btn primary">CSV を開く<input type="file" id="fileOpen" multiple accept=".csv,.CSV,text/csv"></label>
     <label class="btn">ログを追加<input type="file" id="fileAdd" multiple accept=".csv,.CSV,text/csv"></label>
+    <button class="btn" id="suzuka" type="button" hidden>鈴鹿シミュ</button>
     <button class="btn" id="sample" type="button">サンプル</button>
   </div>
 </header>
@@ -389,6 +390,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
 <div class="drop-veil" aria-hidden="true">ここに CSV を落とす</div>
 
 <script src="logviewer-core.js"></script>
+<script src="../suzuka_sim/suzuka-sim.js"></script>
 <script>
 'use strict';
 (function () {
@@ -524,6 +526,54 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
   }
 
   // ---------------------------------------------------------------------------
+  //  鈴鹿サーキットのシミュレーション (tools/suzuka_sim/suzuka-sim.js の物理モデル)
+  //  走り方を 4 つ計算し、電力計と同じ形の CSV にしてから読む。速さ・標高・ブレーカーの熱も付ける
+  const SIM = window.SuzukaSim;
+  if (SIM) $('suzuka').hidden = false;
+  function loadSuzuka() {
+    stop();
+    notice('鈴鹿サーキットを走らせています…');
+    setTimeout(() => {
+      const list = SIM.strategies({}, 0.95);
+      state.runs = []; state.compare.clear(); state.batch = 1; state.sample = true;
+      list.forEach((st, n) => {
+        const res = st.result, rec = res.rec;
+        const f = C.parseCsv(SIM.toCsv(res), `${st.key}.CSV`);
+        const r = C.buildRuns([f])[0];
+        r.key = 'sim:' + st.key; r.index = n; r.label = st.name;
+        r.files = [`鈴鹿シミュ · ${st.note}`];
+        r.ext = {
+          speed: Float64Array.from(rec.v, (x) => x * 3.6),
+          elev: Float64Array.from(rec.elev),
+          heat: Float64Array.from(rec.heat, (x) => x * 100),
+        };
+        // ゴールとブレーカーの印
+        r.marks = [];
+        for (const a of res.attacks) {
+          if (a.finished) r.marks.push({ t: a.startT + a.lapS, label: `${a.attack}回目 ゴール ${C.fmtTime(a.lapS)}` });
+          else r.marks.push({ t: a.startT + a.lapS, label: `${a.attack}回目 停止`, warn: true });
+        }
+        for (const e of res.events) if (e.kind === 'trip') r.marks.push({ t: e.t, label: 'ブレーカー', warn: true });
+        r.summary = C.stats(r);
+        r.sim = res;
+        state.runs.push(r);
+        if (n < SLOTS) toggleCompare(r.key, true);
+      });
+      const just = list[0].result;
+      $('budget').value = Math.round(just.capacityMah);
+      $('race').value = Math.ceil(just.rec.t[just.rec.t.length - 1] / 60);
+      const rows = list.map((st) => {
+        const r = st.result;
+        return `<b>${esc(st.name)}</b> ${r.dnf ? '完走できず' : C.fmtTime(r.totalLapS)}・${r.usedMah.toFixed(0)}mAh${r.trips ? `・ブレーカー ${r.trips} 回` : ''}`;
+      });
+      notice(`<b>鈴鹿サーキットのシミュレーション</b>（物理モデル。コースの標高とカーブは公開情報からの近似）。フルコース 5.807km を 3 回タイムアタック、単3 20直列×2並列、ブレーカー 10A。` +
+        ` 合計タイム: ${rows.join(' / ')}`);
+      selectRun(0);
+    }, 30);
+  }
+  $('suzuka').addEventListener('click', loadSuzuka);
+
+  // ---------------------------------------------------------------------------
   //  選択・比較
   const run = () => state.runs[state.active];
   function selectRun(k) {
@@ -621,6 +671,10 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     { key: 'p', title: '電力', unit: 'W', digits: 0, zero: true, color: 'var(--trace-p)', h: 104 },
     { key: 'q', title: '積算', unit: 'mAh', digits: 1, zero: true, color: 'var(--trace-q)', h: 120 },
     { key: 'pace', title: '予算との差', unit: 'mAh', digits: 0, zero: true, color: 'var(--ink-2)', h: 110 },
+    // ここから下はシミュレーションのときだけ (電力計の記録にはない)
+    { key: 'speed', title: '速さ', unit: 'km/h', digits: 1, zero: true, color: 'var(--s4)', h: 104, ext: true },
+    { key: 'elev', title: '標高', unit: 'm', digits: 1, zero: true, color: 'var(--muted)', h: 84, ext: true },
+    { key: 'heat', title: 'ブレーカーの熱', unit: '%', digits: 0, zero: true, color: 'var(--critical)', h: 84, ext: true },
   ];
   let geo = null;
 
@@ -653,12 +707,12 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       if (last && X(a) - X(last.t1) < 1) last.t1 = b; else overs.push({ t0: a, t1: b });
     }
     geo = { strips: [], X, tA, tB, pw, W, r };
-    const strips = STRIPS.filter((c) => c.key !== 'pace' || pace);
+    const strips = STRIPS.filter((c) => (c.key !== 'pace' || pace) && (!c.ext || (r.ext && r.ext[c.key])));
     let html = '';
     strips.forEach((c, n) => {
       const last = n === strips.length - 1;
       const H = c.h + (last ? 18 : 0), ph = c.h - M.t - M.b;
-      const y = c.key === 'pace' ? pace : r[c.key];
+      const y = c.key === 'pace' ? pace : c.ext ? r.ext[c.key] : r[c.key];
       let lo = Infinity, hi = -Infinity;
       for (let k = i0; k <= i1; k++) { if (y[k] < lo) lo = y[k]; if (y[k] > hi) hi = y[k]; }
       if (c.key === 'q' && pace) {
@@ -666,6 +720,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
         lo = Math.min(lo, r.q[0] + B * Math.max(0, Math.min(tA - r.t[0], R)) / R);
       }
       if (c.key === 'pace') { const m = Math.max(Math.abs(lo), Math.abs(hi), 1); lo = -m; hi = m; }
+      if (c.key === 'heat') hi = Math.max(hi, 100);
       if (c.zero) lo = Math.min(lo, 0);
       if (!(hi > lo)) hi = lo + 1;
       const padY = c.zero && c.key !== 'pace' ? 0 : (hi - lo) * 0.06;
@@ -692,6 +747,13 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
         g += `<line class="join" x1="${xx}" x2="${xx}" y1="${M.t}" y2="${M.t + ph}"/>`;
         if (n === 0) g += `<text class="lbl" x="${+xx + 4}" y="${M.t + 12}">Nano リセット</text>`;
       }
+      for (const mk of r.marks || []) {
+        if (mk.t < tA || mk.t > tB) continue;
+        const xx = X(mk.t).toFixed(1);
+        g += `<line x1="${xx}" x2="${xx}" y1="${M.t}" y2="${M.t + ph}" style="stroke:${mk.warn ? 'var(--critical)' : 'var(--ink-2)'};stroke-width:1"/>`;
+        if (n === 0) g += `<text class="lbl" x="${+xx - 4}" y="${M.t + 12}" text-anchor="end" style="${mk.warn ? 'fill:var(--bad-text)' : ''}">${esc(mk.label)}</text>`;
+      }
+      if (c.key === 'heat') g += `<line x1="${M.l}" x2="${M.l + pw}" y1="${Y(100).toFixed(1)}" y2="${Y(100).toFixed(1)}" style="stroke:var(--critical);stroke-width:1"/><text class="lbl" x="${M.l + pw - 4}" y="${(Y(100) - 4).toFixed(1)}" text-anchor="end">100% で切れる</text>`;
       if (c.key === 'i') for (const o of overs) g += `<rect class="over" x="${X(o.t0).toFixed(1)}" y="${M.t - 7}" width="${Math.max(2, X(o.t1) - X(o.t0)).toFixed(1)}" height="4" rx="1"/>`;
       const d = C.decimate(r.t, y, i0, i1, buckets);
       let path = '';
@@ -743,6 +805,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       if (c.key === 'i' && s.gaps.length) legend.push('<span><i class="box" style="background:var(--gap-fill)"></i>記録なし</span>');
       if (c.key === 'q' && pace) legend.push(`<span><i style="background:${c.color}"></i>実際</span><span><i style="background:var(--ink-2)"></i>予算ペース</span>`);
       if (c.key === 'pace') legend.push(`<span>予算 ${B} mAh を ${R / 60} 分で均等に使う線との差</span>`);
+      if (c.ext) legend.push('<span>シミュレーションの値（電力計の記録にはない）</span>');
       html += `<div class="strip"><div class="strip-h"><b><i style="background:${c.key === 'pace' ? 'var(--ink-2)' : c.color}"></i>${c.title} <span>${c.unit}</span></b><span class="legend">${legend.join('')}</span></div>
         <svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${c.title}の時間変化">${g}</svg></div>`;
     });
@@ -793,6 +856,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       const r = run(), pace = paceSeries(r);
       const rows = [['電流', `${r.i[k].toFixed(2)} A`], ['電圧', `${r.v[k].toFixed(3)} V`], ['電力', `${r.p[k].toFixed(0)} W`], ['積算', `${r.q[k].toFixed(1)} mAh`]];
       if (pace) rows.push(['予算との差', `${pace[k] > 0 ? '+' : ''}${pace[k].toFixed(0)} mAh`]);
+      if (r.ext) rows.push(['速さ', `${r.ext.speed[k].toFixed(1)} km/h`], ['区間', esc(r.sim.rec.section[k])]);
       if (r.i[k] >= C.DEFAULT_OVER_A) rows.push(['⚠', 'OVER（20A で頭打ち）']);
       tip.innerHTML = `<div class="t">${C.fmtTime(r.t[k] - r.t[0])} · t=${r.t[k].toFixed(2)}s</div><table>${rows.map((x) => `<tr><td>${x[0]}</td><td>${x[1]}</td></tr>`).join('')}</table>`;
       tip.style.display = 'block';
@@ -961,6 +1025,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     } else {
       cells.push(ro('経過', C.fmtTime(r.t[k] - r.t[0]), '', '予算を入れると差も出る'));
     }
+    if (r.ext) cells.unshift(ro('速さ · シミュレーション', r.ext.speed[k].toFixed(1), 'km/h', `${esc(r.sim.rec.section[k])} · 標高 ${r.ext.elev[k].toFixed(0)} m`, 'wide'));
     $('live').innerHTML = cells.join('');
   }
 
