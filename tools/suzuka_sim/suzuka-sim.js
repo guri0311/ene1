@@ -260,16 +260,16 @@
   function simulate(params) {
     const p = Object.assign({}, DEFAULTS, params || {});
     const bat = battery(p);
-    const rec = { t: [], d: [], v: [], elev: [], i: [], volt: [], q: [], section: [], heat: [], im: [], attack: [], phase: [] };
+    const rec = { t: [], d: [], v: [], elev: [], i: [], volt: [], q: [], section: [], heat: [], im: [], field: [], attack: [], phase: [] };
     let curAttack = 1, phase = '走行';
     const attacks = [], events = [], brakeBySection = {};
     const loss = { aero: 0, roll: 0, brake: 0, battery: 0, motor: 0, chain: 0, ctrl: 0, climb: 0 };
     let t = 0, usedAh = 0, dnf = null, heat = 0, tripped = false, trips = 0;
     const dt = p.dt;
-    const record = (dAbs, v, i, volt, im) => {
+    const record = (dAbs, v, i, volt, im, k) => {
       rec.t.push(+t.toFixed(3)); rec.d.push(dAbs); rec.v.push(v); rec.elev.push(elevationAt(dAbs));
       rec.i.push(i); rec.volt.push(volt); rec.q.push(usedAh * 1000); rec.section.push(sectionAt(dAbs));
-      rec.heat.push(heat / p.breakerHeatS); rec.im.push(im); rec.attack.push(curAttack); rec.phase.push(phase);
+      rec.heat.push(heat / p.breakerHeatS); rec.im.push(im); rec.field.push(k === undefined ? 1 : k); rec.attack.push(curAttack); rec.phase.push(phase);
     };
     const breakerStep = (i) => {
       const x = (i / p.breakerA) ** 2 - 1;
@@ -317,7 +317,7 @@
         const boosting = p.boostA !== null && grade > p.boostGrade && heat < p.boostHeatMax * p.breakerHeatS;
         let capA = boosting ? Math.max(p.boostA, p.maxCurrentA) : p.maxCurrentA;
         if (p.downhillA !== null && grade < p.downhillGrade) capA = Math.min(capA, p.downhillA);
-        const dr = fWant > 0 ? drive(fWant, v, usedAh, bat, p, capA) : { force: 0, ib: 0, vb: bat.ocv(usedAh), im: 0 };
+        const dr = fWant > 0 ? drive(fWant, v, usedAh, bat, p, capA) : { force: 0, ib: 0, vb: bat.ocv(usedAh), im: 0, k: 1 };
         const fMotor = Math.min(dr.force, fWant);
         const i = dr.ib, volt = dr.vb;
         const wasTripped = tripped;
@@ -337,7 +337,7 @@
         v = vNew; d += ds; t += dt;
         usedAh += i * dt / 3600;
         peakA = Math.max(peakA, i); minV = Math.min(minV, volt);
-        record(a * LAP_M + d, v, i, volt, dr.im);
+        record(a * LAP_M + d, v, i, volt, dr.im, dr.k);
         stuck = v < 0.3 && !tripped ? stuck + dt : 0;
         if (stuck > 20) { dnf = { attack: a + 1, d, section: sectionAt(d), reason: '電池の電圧が下がり、上りで止まった' }; break; }
       }
@@ -454,7 +454,7 @@
   function toDetailCsv(result) {
     const r = result.rec;
     const head = ['time_s', 'attack', 'phase', 'lap_distance_m', 'section', 'elevation_m', 'grade_pct', 'speed_kmh',
-      'voltage_V', 'current_A', 'power_W', 'charge_mAh', 'motor_current_A', 'breaker_heat_pct'];
+      'voltage_V', 'current_A', 'power_W', 'charge_mAh', 'motor_current_A', 'field_pct', 'breaker_heat_pct'];
     const out = ['\ufeff' + head.join(',')];
     for (let k = 0; k < r.t.length; k++) {
       const lapD = Math.max(0, Math.min(r.d[k] - (r.attack[k] - 1) * LAP_M, LAP_M));
@@ -462,7 +462,7 @@
       out.push([
         r.t[k].toFixed(3), r.attack[k], r.phase[k], lapD.toFixed(1), r.section[k], r.elev[k].toFixed(2),
         running ? (gradeAt(r.d[k]) * 100).toFixed(2) : '', (r.v[k] * 3.6).toFixed(2), r.volt[k].toFixed(3),
-        r.i[k].toFixed(3), (r.volt[k] * r.i[k]).toFixed(2), r.q[k].toFixed(2), r.im[k].toFixed(2), (r.heat[k] * 100).toFixed(1),
+        r.i[k].toFixed(3), (r.volt[k] * r.i[k]).toFixed(2), r.q[k].toFixed(2), r.im[k].toFixed(2), (r.field[k] * 100).toFixed(0), (r.heat[k] * 100).toFixed(1),
       ].join(','));
     }
     return out.join('\n') + '\n';
