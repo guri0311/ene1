@@ -39,6 +39,8 @@ export class Board {
     this.ina = new INA228(this);
     this.lcd = new RW1063(this, lcdAddr);
     this.sd = new SdCard(this, sdImage);
+    // EEPROM は電源を切っても残るので、チップを作り直しても同じ中身を使う
+    this.eeprom = new avr.EEPROMMemoryBackend(1024);
     this.i2cDevices = [this.ina, this.lcd];
     this.serial = [];
     this.serialLine = '';
@@ -83,6 +85,7 @@ export class Board {
     };
     this.portB.addListener(() => { if (this.portB.pinState(2) !== avr.PinState.Low) this.sd.deselect(); });
     new avr.AVRWatchdog(cpu, avr.watchdogConfig, clock);
+    new avr.AVREEPROM(cpu, this.eeprom);
     const origReset = cpu.reset.bind(cpu);
     cpu.reset = () => { origReset(); this.pendingReset = 'watchdog'; };
     const origWdr = cpu.onWatchdogReset;

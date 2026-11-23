@@ -198,21 +198,119 @@ expect_lcd 3 "REC LOG001.CSV"
 expect_clean
 EOF
 boot warm cold <<'EOF'
-say "10c. 電源を入れ直す → 0 から"
+say "10c. 電源が全部落ちて戻る → EEPROM に保存した積算と時間から続ける (保存は 2 秒ごと)"
+v 24
+i 10
+setup
+expect_lcd 1 "RESTORED (mAh KEPT)"
+run 3000
+lcd
+# 6 分 + 起動中の 1.5 秒で約 1004mAh。最後の保存は最大 2 秒前なので、そこから 3 秒ぶん増える
+expect_charge 1000 1018
+expect_lcd 2 "TIME  06:0"
+expect_clean
+EOF
+boot warm warm <<'EOF'
+say "10d. 3 秒長押しで 0 にしてから電源を入れ直す → 0 から"
+v 24
+i 0
+setup
+run 1000
+press 3500
+run 1000
+EOF
+boot warm cold <<'EOF'
+say "10e. (10d の続き) 電源を入れ直しても 0 のまま"
 v 24
 setup
 run 2000
+lcd
 expect_charge -0.5 0.5
 expect_lcd 2 "TIME  00:0"
+expect_clean
 EOF
 
 boot noina cold <<'EOF'
-say "11. INA228 が見つからない → エラー表示で停止"
+say "11. 起動時に INA228 が見つからない → 止まらずに探し続け、つながったら表示する"
+v 24
+i 10
 ina off
 setup
 lcd
 expect_lcd 0 "INA228 NOT FOUND"
-expect_lcd 3 "STOPPED"
+expect_lcd 1 "RETRYING"
+run 5000
+lcd
+expect_lcd 0 "INA228 I2C ERROR"
+expect_lcd 1 "LAST    Q:     0mAh"
+ina on
+run 36000
+lcd
+expect_lcd 0 "I: 10.00A"
+expect_charge 98 101
+expect_clean
+EOF
+
+boot powerloss cold <<'EOF'
+say "11b. 走行中に電力計の電源が全部落ちる (前半): 10A で約 60 秒"
+v 24
+i 10
+setup
+run 60000
+# 起動中の 1.5 秒も 10A が流れているので 61.5 秒ぶん = 約 171mAh
+expect_charge 169 173
+EOF
+boot powerloss cold <<'EOF'
+say "11c. (後半) 電源が戻る → 0 に戻らず続きから数え、すぐに電流を表示する"
+v 24
+i 10
+setup
+expect_lcd 1 "RESTORED (mAh KEPT)"
+run 300
+lcd
+expect_lcd 0 "I: 10.00A"
+# 最後の保存 (最大 2 秒前、約 5.6mAh 前) から続ける
+expect_charge 165 175
+run 36000
+expect_charge 265 278
+expect_clean
+EOF
+
+boot torn cold <<'EOF'
+say "11d. EEPROM に書いている途中で電源が落ちる (前半): 10A で 61 秒"
+v 24
+i 10
+setup
+run 61000
+eeprom_tear
+EOF
+boot torn cold <<'EOF'
+say "11e. (後半) 壊れた記録は使わず、1 つ前の記録 (2 秒前) から続ける"
+v 24
+i 0
+setup
+expect_lcd 1 "RESTORED (mAh KEPT)"
+run 1000
+lcd
+expect_charge 158 170
+expect_clean
+EOF
+
+boot inalost cold <<'EOF'
+say "11f. INA228 が読めない間も、最後に読めた積算を表示する"
+v 24
+i 10
+setup
+run 36000
+ina off
+run 3000
+lcd
+expect_lcd 0 "INA228 I2C ERROR"
+expect_lcd 1 "LAST    Q:   10"
+ina on
+run 2000
+expect_charge 104 112
+expect_clean
 EOF
 
 boot lcd3d cold <<'EOF'
@@ -254,6 +352,8 @@ lcd
 expect_charge 29990 30020
 expect_lcd 1 "Q: 300"
 expect_lcd 2 "TIME  120:0"
+# 2 秒ごとに 64 か所へ順番に書くので、2 時間で 1 バイトあたり約 57 回
+expect_ee_wear 60
 expect_clean
 EOF
 
