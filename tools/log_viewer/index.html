@@ -566,7 +566,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
         const r = st.result;
         return `<b>${esc(st.name)}</b> ${r.dnf ? '完走できず' : C.fmtTime(r.totalLapS)}・${r.usedMah.toFixed(0)}mAh${r.trips ? `・ブレーカー ${r.trips} 回` : ''}`;
       });
-      notice(`<b>鈴鹿サーキットのシミュレーション</b>（物理モデル。コースの標高とカーブは公開情報からの近似）。フルコース 5.807km を 3 回タイムアタック、単3 20直列×2並列、ブレーカー 10A。` +
+      notice(`<b>鈴鹿サーキットのシミュレーション</b>（物理モデル。標高とカーブ半径は 2026 KV-40 特別規則の図、モーターは M1048 の特性図から。空気抵抗・転がり抵抗は見積もり）。フルコース 5.807km を止まった状態から 3 回タイムアタック、単3 20直列×2並列、ブレーカー 10A。` +
         ` 合計タイム: ${rows.join(' / ')}`);
       selectRun(0);
     }, 30);

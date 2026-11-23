@@ -35,7 +35,7 @@ const p0 = Object.assign({}, S.DEFAULTS, base);
 const SHARE = 0.95;   // 容量の 95% を使い切る目標 (残り 5% は個体差と見積もりの誤差のため)
 const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 console.log('# 鈴鹿サーキット フルコース 5.807km × 3 回タイムアタックのシミュレーション\n');
-console.log(`車: ${p0.massKg}kg、Crr ${p0.crr}、CdA ${p0.cdA}m²、効率 ${p0.efficiency}`);
+console.log(`車: ${p0.massKg}kg、Crr ${p0.crr}、CdA ${p0.cdA}m²、モーター ${S.MOTOR.name} (可変界磁 ${p0.fieldMin} まで)、ギア比 ${p0.gearRatio.toFixed(2)}、タイヤ外径 ${p0.tireDiameterM}m`);
 console.log(`電池: 単3 ${p0.series}直列×${p0.parallel}並列 (${p0.cellMah * p0.parallel}mAh、内部抵抗 ${p0.cellOhm * 1000}mΩ/本 → ${(p0.cellOhm * p0.series / p0.parallel).toFixed(2)}Ω)`);
 console.log(`ブレーカー: ${p0.breakerA}A (2 倍で約 ${Math.round(p0.breakerHeatS / 3)} 秒で切れる近似)、アタックの間の待ち ${p0.waitS} 秒\n`);
 console.log('| 走り方 | 平らな所の速さ | 1回目 | 2回目 | 3回目 | 合計 | 使った量 | 最大電流 | 最低電圧 | ブレーカー |');
@@ -48,12 +48,12 @@ for (const { st, r } of results) {
   console.log(`| ${st.name} | ${st.params.cruiseKmh.toFixed(1)} km/h | ${laps.join(' | ')} | ${total} | ${r.usedMah.toFixed(0)} mAh (${(r.usedMah / r.capacityMah * 100).toFixed(0)}%) | ${peak.toFixed(1)} A | ${minV.toFixed(1)} V | ${r.trips ? `${r.trips} 回切れた` : '切れない'} |`);
 }
 console.log('\n## エネルギーの行き先 (3 回分) [Wh]\n');
-console.log('| 走り方 | 空気抵抗 | 転がり抵抗 | ブレーキ | 電池の内部抵抗 | モーター・駆動系 | 電池から出した合計 |');
-console.log('|---|---|---|---|---|---|---|');
+console.log('| 走り方 | 空気抵抗 | 転がり抵抗 | ブレーキ | 電池の内部抵抗 | モーター | チェーン・コントローラー | 電池から出した合計 |');
+console.log('|---|---|---|---|---|---|---|---|');
 for (const { st, r } of results) {
   const e = r.energyWh;
-  const totalWh = e.aero + e.roll + e.brake + e.battery + e.drive + e.climbNet;
-  console.log(`| ${st.name} | ${e.aero.toFixed(1)} | ${e.roll.toFixed(1)} | ${e.brake.toFixed(1)} | ${e.battery.toFixed(1)} | ${e.drive.toFixed(1)} | ${totalWh.toFixed(1)} |`);
+  const totalWh = e.aero + e.roll + e.brake + e.battery + e.motor + e.drive + e.climbNet;
+  console.log(`| ${st.name} | ${e.aero.toFixed(1)} | ${e.roll.toFixed(1)} | ${e.brake.toFixed(1)} | ${e.battery.toFixed(1)} | ${e.motor.toFixed(1)} | ${e.drive.toFixed(1)} | ${totalWh.toFixed(1)} |`);
 }
 for (const { st, r } of results) {
   if (!r.events.length) continue;
