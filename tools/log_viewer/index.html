@@ -12,178 +12,196 @@
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,500;0,600;0,700;1,600;1,700;1,800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-/* レイアウト: 記録紙 (グラフ用紙) の上に、時間軸をそろえたストリップチャートを積み、右に計器盤を置く */
+/* レイアウト: ピットのモニター。いちばん上に電池の帯 (使った量と予算)、その下に時間軸をそろえたストリップチャート、
+   右に計器盤。数字はゼッケンのような太い斜体。ダークが基本で、ライトは昼のピット用 */
 :root {
-  color-scheme: light;
-  --paper: #eef1ef;         /* 記録紙の地 */
-  --panel: #f9fbfa;         /* 計器盤・チャートの面 */
-  --ink: #111a20;           /* 文字 */
-  --ink-2: #47535c;         /* 補助の文字 */
-  --muted: #84909a;         /* 目盛り */
-  --grid: #dde4e1;          /* 細い格子 */
-  --grid-2: #c5cfcb;        /* 太い格子・軸 */
-  --ring: rgba(17, 26, 32, 0.10);
-  --wash: rgba(17, 26, 32, 0.045);
-  --trace-i: #2a78d6;       /* 電流 */
-  --trace-v: #1baf7a;       /* 電圧 */
-  --trace-p: #eb6834;       /* 電力 */
-  --trace-q: #6250d6;       /* 積算 */
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
-  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
-  --over: #e34948;          /* 予算より使いすぎ */
-  --under: #2a78d6;         /* 予算より余裕 */
-  --warning: #fab219;
-  --critical: #d03b3b;
-  --good-text: #006300;
-  --bad-text: #b42323;
-  --gap-fill: rgba(132, 144, 154, 0.18);
-  --sel-fill: rgba(42, 120, 214, 0.12);
-  --bar: #111a20;           /* 上のバー */
-  --bar-ink: #eef1ef;
+  color-scheme: dark;
+  --bg: #090d12;            /* 画面の地 */
+  --bg-2: #0e141b;          /* 地のグラデーションの奥 */
+  --panel: #0f161e;         /* 面 */
+  --panel-2: #141d27;       /* 一段明るい面 */
+  --ink: #edf2f6;           /* 文字 */
+  --ink-2: #a3b3c0;         /* 補助の文字 */
+  --muted: #687a8b;         /* 目盛り */
+  --grid: #18222c;          /* 格子 */
+  --grid-2: #253241;        /* 軸 */
+  --ring: rgba(255, 255, 255, 0.08);
+  --wash: rgba(255, 255, 255, 0.045);
+  --trace-i: #3987e5; --trace-v: #199e70; --trace-p: #d95926; --trace-q: #9085e9;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
+  --over: #e66767; --under: #3987e5;
+  --warning: #fab219; --critical: #d03b3b; --good-text: #3ccf5c; --bad-text: #ff8a8a;
+  --gap-fill: rgba(104, 122, 139, 0.22); --sel-fill: rgba(57, 135, 229, 0.16);
+  --cell-off: #1a2430;      /* 電池のセル (空) */
+  --glow: drop-shadow(0 0 3px currentColor);
+  --bar: #05080b; --bar-ink: #edf2f6;
   --f-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
   --f-body: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
   --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --paper: #0c1216; --panel: #121a20; --ink: #e7edef; --ink-2: #b1bec5; --muted: #76858e;
-    --grid: #1c262d; --grid-2: #2a3740; --ring: rgba(255, 255, 255, 0.09); --wash: rgba(255, 255, 255, 0.05);
-    --trace-i: #3987e5; --trace-v: #199e70; --trace-p: #d95926; --trace-q: #9085e9;
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
-    --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
-    --over: #e66767; --under: #3987e5; --good-text: #2fbf4a; --bad-text: #f08080;
-    --gap-fill: rgba(118, 133, 142, 0.22); --sel-fill: rgba(57, 135, 229, 0.18);
-    --bar: #05090c; --bar-ink: #e7edef;
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #e9edf0; --bg-2: #f4f6f8; --panel: #fbfcfd; --panel-2: #f1f4f6; --ink: #0d151c; --ink-2: #46525d; --muted: #7f8b96;
+    --grid: #e1e6ea; --grid-2: #c8d0d7; --ring: rgba(13, 21, 28, 0.10); --wash: rgba(13, 21, 28, 0.045);
+    --trace-i: #2a78d6; --trace-v: #1baf7a; --trace-p: #eb6834; --trace-q: #6250d6;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+    --over: #e34948; --under: #2a78d6; --good-text: #006300; --bad-text: #b42323;
+    --gap-fill: rgba(127, 139, 150, 0.18); --sel-fill: rgba(42, 120, 214, 0.12); --cell-off: #dde3e8; --glow: none;
+    --bar: #0d151c; --bar-ink: #edf2f6;
   }
 }
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --paper: #0c1216; --panel: #121a20; --ink: #e7edef; --ink-2: #b1bec5; --muted: #76858e;
-  --grid: #1c262d; --grid-2: #2a3740; --ring: rgba(255, 255, 255, 0.09); --wash: rgba(255, 255, 255, 0.05);
-  --trace-i: #3987e5; --trace-v: #199e70; --trace-p: #d95926; --trace-q: #9085e9;
-  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
-  --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
-  --over: #e66767; --under: #3987e5; --good-text: #2fbf4a; --bad-text: #f08080;
-  --gap-fill: rgba(118, 133, 142, 0.22); --sel-fill: rgba(57, 135, 229, 0.18);
-  --bar: #05090c; --bar-ink: #e7edef;
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #e9edf0; --bg-2: #f4f6f8; --panel: #fbfcfd; --panel-2: #f1f4f6; --ink: #0d151c; --ink-2: #46525d; --muted: #7f8b96;
+  --grid: #e1e6ea; --grid-2: #c8d0d7; --ring: rgba(13, 21, 28, 0.10); --wash: rgba(13, 21, 28, 0.045);
+  --trace-i: #2a78d6; --trace-v: #1baf7a; --trace-p: #eb6834; --trace-q: #6250d6;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --over: #e34948; --under: #2a78d6; --good-text: #006300; --bad-text: #b42323;
+  --gap-fill: rgba(127, 139, 150, 0.18); --sel-fill: rgba(42, 120, 214, 0.12); --cell-off: #dde3e8; --glow: none;
+  --bar: #0d151c; --bar-ink: #edf2f6;
 }
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; color: var(--ink); font: 14px/1.55 var(--f-body);
-  background-color: var(--paper);
-  /* 記録紙の格子 (1 マス 8px、5 マスごとに太線) */
+  background-color: var(--bg);
   background-image:
+    radial-gradient(1200px 520px at 70% 0, var(--bg-2), transparent 70%),
     linear-gradient(var(--grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 8px 8px;
+  background-size: 100% 900px, 24px 24px, 24px 24px;
+  background-repeat: no-repeat, repeat, repeat;
 }
-body::before {
-  content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bar);
-}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bar); }
 :focus-visible { outline: 2px solid var(--trace-i); outline-offset: 2px; }
 button, select, input { font: inherit; color: inherit; }
+.num { font-family: var(--f-display); font-style: italic; font-weight: 800; letter-spacing: 0.005em; font-variant-numeric: tabular-nums; }
 
-/* ---- 上のバー ---- */
+/* ---- 上のバー (ゼッケンのような社名と、車体のストライプ) ---- */
 .bar {
   position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--bar); color: var(--bar-ink);
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
 }
-.bar-in { max-width: 1320px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding-block: 10px; }
-.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
-.brand .mark {
-  width: 26px; height: 26px; border-radius: 6px; flex: none;
-  background: conic-gradient(from 200deg, var(--trace-i) 0 62%, var(--warning) 62% 70%, transparent 70%);
-  -webkit-mask: radial-gradient(circle at 50% 60%, transparent 5px, #000 5.5px); mask: radial-gradient(circle at 50% 60%, transparent 5px, #000 5.5px);
+.bar::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 3px;
+  background: linear-gradient(90deg, var(--trace-i) 0 64%, var(--bar) 64% 64.6%, var(--trace-p) 64.6% 82%, var(--bar) 82% 82.6%, var(--warning) 82.6%);
 }
-.brand b { font: 700 21px/1 var(--f-display); letter-spacing: 0.06em; text-transform: uppercase; }
-.brand small { font: 500 11px/1 var(--f-mono); opacity: 0.6; letter-spacing: 0.04em; }
+.bar-in { max-width: 1360px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding-block: 11px; }
+.brand { display: flex; align-items: center; gap: 12px; margin-right: auto; }
+.brand .mark { display: flex; gap: 3px; transform: skewX(-18deg); }
+.brand .mark i { display: block; width: 7px; height: 26px; border-radius: 1px; }
+.brand .mark i:nth-child(1) { background: var(--trace-i); }
+.brand .mark i:nth-child(2) { background: var(--trace-p); height: 20px; margin-top: 6px; }
+.brand .mark i:nth-child(3) { background: var(--warning); height: 13px; margin-top: 13px; }
+.brand b { font: italic 800 24px/1 var(--f-display); letter-spacing: 0.04em; text-transform: uppercase; }
+.brand small { display: block; font: 500 10.5px/1.4 var(--f-mono); color: rgba(237, 242, 246, 0.55); letter-spacing: 0.06em; margin-top: 3px; }
 .bar .btn {
-  border: 1px solid rgba(255, 255, 255, 0.22); background: transparent; color: var(--bar-ink);
-  border-radius: 6px; padding: 6px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.2); background: transparent; color: var(--bar-ink);
+  border-radius: 4px; padding: 6px 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  font-weight: 600; letter-spacing: 0.02em;
 }
 .bar .btn:hover { background: rgba(255, 255, 255, 0.08); }
 .bar .btn.primary { background: var(--trace-i); border-color: var(--trace-i); color: #fff; }
-.bar .btn.primary:hover { filter: brightness(1.1); }
+.bar .btn.primary:hover { filter: brightness(1.12); }
 .btn input[type=file] { display: none; }
-.budget { display: flex; align-items: center; gap: 8px; font: 500 12px var(--f-mono); color: rgba(231, 237, 239, 0.75); flex-wrap: wrap; }
+.budget { display: flex; align-items: center; gap: 7px; font: 500 11.5px var(--f-mono); color: rgba(237, 242, 246, 0.7); flex-wrap: wrap; letter-spacing: 0.04em; }
 .budget input {
-  width: 72px; padding: 5px 7px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.22);
-  background: rgba(255, 255, 255, 0.06); color: var(--bar-ink); font: 500 13px var(--f-mono); text-align: right;
+  width: 74px; padding: 5px 8px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06); color: var(--bar-ink); font: italic 700 17px/1 var(--f-display); text-align: right;
 }
-:root[data-theme="light"] .bar .budget, :root[data-theme="light"] .bar .btn:not(.primary) { color: #e7edef; }
 
 /* ---- 本体 ---- */
-.page { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 40px; }
-.wrap { max-width: 1320px; margin: 0 auto; display: grid; gap: 14px; }
-.notice {
-  padding: 8px 12px; border-radius: 8px;
-  background: var(--panel); border: 1px dashed var(--grid-2); color: var(--ink-2); font-size: 13px;
-}
+.page { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 18px 44px; }
+.wrap { max-width: 1360px; margin: 0 auto; display: grid; gap: 14px; }
+.notice { padding: 8px 12px; border-radius: 6px; background: var(--panel); border: 1px dashed var(--grid-2); color: var(--ink-2); font-size: 13px; }
 .notice.warn::before { content: "⚠ "; color: var(--warning); }
 .notice b { color: var(--ink); }
-.layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; align-items: start; }
-@media (max-width: 980px) { .layout { grid-template-columns: minmax(0, 1fr); } }
-.panel { background: var(--panel); border: 1px solid var(--ring); border-radius: 10px; min-width: 0; }
-.panel-h {
-  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px;
-  padding: 12px 14px 0;
-}
-.eyebrow { font: 500 11px/1.2 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
-h2 { margin: 0; font: 600 19px/1.15 var(--f-display); letter-spacing: 0.03em; text-wrap: balance; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; align-items: start; }
+@media (max-width: 1000px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--ring); border-radius: 8px; min-width: 0; }
+.panel-h { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; padding: 13px 16px 0; }
+.eyebrow { font: 500 10.5px/1.3 var(--f-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+h2 { margin: 2px 0 0; font: italic 700 22px/1.1 var(--f-display); letter-spacing: 0.02em; text-wrap: balance; }
 .hint { color: var(--muted); font-size: 12.5px; }
 
-/* ---- 走行の数字 (読み取り帯) ---- */
-.readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); border-top: 1px solid var(--ring); margin-top: 10px; }
-.ro { padding: 10px 14px 12px; border-right: 1px solid var(--ring); border-bottom: 1px solid var(--ring); min-width: 0; }
-.ro .k { font: 500 11px/1.2 var(--f-mono); letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; }
-.ro .k span { text-transform: none; letter-spacing: 0; font-family: var(--f-body); }
-.ro .v { font: 600 34px/1.05 var(--f-display); letter-spacing: 0.01em; margin-top: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.ro .v small { font: 500 15px var(--f-display); color: var(--ink-2); margin-left: 3px; letter-spacing: 0.04em; }
-.ro .d { color: var(--ink-2); font-size: 12px; margin-top: 2px; }
-.ro.hero .v { font-size: 46px; }
-.ro.status { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding-block: 8px; border-right: 0; }
-.ro.status .chip { white-space: normal; }
+/* ---- 電池の帯 (主役) ---- */
+.battery {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px 28px; align-items: end;
+  padding: 16px 16px 18px; margin-top: 12px; border-top: 1px solid var(--ring);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+}
+@media (max-width: 760px) { .battery { grid-template-columns: 1fr auto; } .bat-cells { grid-column: 1 / -1; order: 3; } }
+.bat-k { font: 500 10.5px/1.3 var(--f-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.bat-big { font: italic 800 clamp(54px, 7vw, 84px)/0.9 var(--f-display); letter-spacing: -0.005em; font-variant-numeric: tabular-nums; margin-top: 6px; white-space: nowrap; }
+.bat-big small { font: italic 700 22px var(--f-display); color: var(--ink-2); margin-left: 6px; letter-spacing: 0.04em; }
+.bat-sub { color: var(--ink-2); font-size: 12.5px; margin-top: 6px; }
+.bat-delta { text-align: right; }
+.bat-delta .bat-big { font-size: clamp(40px, 5vw, 60px); }
+.bat-delta.over .bat-big { color: var(--bad-text); } .bat-delta.under .bat-big { color: var(--good-text); }
+.bat-cells { min-width: 0; padding-bottom: 6px; }
+.cells { position: relative; display: grid; grid-template-columns: repeat(40, minmax(0, 1fr)); gap: 3px; height: 38px; margin-top: 22px; }
+.cells i { display: block; border-radius: 2px; background: var(--cell-off); transform: skewX(-14deg); }
+.cells i.on { background: var(--trace-i); box-shadow: 0 0 8px -2px var(--trace-i); }
+.cells i.over { background: var(--over); box-shadow: 0 0 8px -2px var(--over); }
+.cells i.part { background: linear-gradient(90deg, var(--trace-i) var(--p), var(--cell-off) var(--p)); }
+.cells .ideal { position: absolute; top: -20px; bottom: -6px; width: 0; border-left: 2px solid var(--ink); pointer-events: none; }
+.cells .ideal span {
+  position: absolute; top: 0; left: 6px; font: 500 10.5px/1 var(--f-mono); letter-spacing: 0.08em; color: var(--ink); white-space: nowrap;
+}
+.cells .ideal.flip span { left: auto; right: 6px; }
+.scale { display: flex; justify-content: space-between; font: 500 10.5px var(--f-mono); color: var(--muted); margin-top: 7px; letter-spacing: 0.04em; }
+.bat-empty { color: var(--ink-2); font-size: 13px; padding: 14px 0 6px; }
+
+/* ---- 数字の列 ---- */
+.readout { display: flex; flex-wrap: wrap; border-top: 1px solid var(--ring); }
+.readout > .ro { flex: 1 1 128px; }
+.ro { padding: 11px 16px 12px; border-right: 1px solid var(--ring); border-bottom: 1px solid var(--ring); min-width: 0; }
+.ro .k { font: 500 10.5px/1.2 var(--f-mono); letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase; }
+.ro .v { font: italic 800 30px/1.05 var(--f-display); margin-top: 5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ro .v small { font: italic 600 14px var(--f-display); color: var(--ink-2); margin-left: 3px; letter-spacing: 0.05em; }
+.ro .d { color: var(--ink-2); font-size: 12px; margin-top: 3px; }
 .ro .good { color: var(--good-text); } .ro .bad { color: var(--bad-text); }
+.readout > .ro.status { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding-block: 9px; border-right: 0; }
+.ro.status .chip { white-space: normal; }
 .chip {
-  display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; font: 500 11.5px/1.6 var(--f-mono);
-  border: 1px solid var(--ring); background: var(--wash); color: var(--ink-2); white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 3px; font: 500 11px/1.6 var(--f-mono);
+  border: 1px solid var(--ring); background: var(--wash); color: var(--ink-2); white-space: nowrap; letter-spacing: 0.03em;
 }
-.chip.warn::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+.chip.warn { border-color: color-mix(in srgb, var(--warning) 45%, transparent); color: var(--ink); }
+.chip.warn::before { content: ""; width: 7px; height: 7px; border-radius: 1px; background: var(--warning); transform: rotate(45deg); }
 .chip.over { color: var(--bad-text); } .chip.under { color: var(--good-text); }
-.scope { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
-.scope button {
-  border: 1px solid var(--grid-2); background: var(--panel); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12.5px;
-}
+.scope { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.scope button { border: 1px solid var(--grid-2); background: transparent; border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 12.5px; }
 .scope button:hover { background: var(--wash); }
-.scope button:disabled { opacity: 0.4; cursor: default; }
+.scope button:disabled { opacity: 0.35; cursor: default; }
 
 /* ---- ストリップチャート ---- */
-.charts { padding: 6px 14px 4px; }
-.strip { position: relative; }
-.strip-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
-.strip-h b { font: 600 14px var(--f-display); letter-spacing: 0.05em; text-transform: uppercase; display: inline-flex; align-items: center; gap: 7px; }
-.strip-h b i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
-.strip-h b span { font: 400 12px var(--f-body); text-transform: none; letter-spacing: 0; color: var(--ink-2); }
+.charts { padding: 4px 16px 4px; }
+.strip-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.strip-h b { font: italic 700 15px var(--f-display); letter-spacing: 0.08em; text-transform: uppercase; display: inline-flex; align-items: center; gap: 8px; }
+.strip-h b i { width: 16px; height: 3px; border-radius: 1px; display: inline-block; transform: skewX(-20deg); }
+.strip-h b span { font: 500 11px var(--f-mono); text-transform: none; letter-spacing: 0.04em; color: var(--muted); font-style: normal; }
 .legend { display: flex; flex-wrap: wrap; gap: 3px 12px; color: var(--ink-2); font-size: 12px; }
 .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: 4px; margin-right: 5px; border-radius: 1px; }
 .legend i.box { height: 9px; width: 9px; vertical-align: -1px; border-radius: 2px; }
 svg { display: block; width: 100%; overflow: visible; }
-svg text { font: 11px var(--f-mono); fill: var(--muted); font-variant-numeric: tabular-nums; }
+svg text { font: 10.5px var(--f-mono); fill: var(--muted); font-variant-numeric: tabular-nums; }
 svg .grid { stroke: var(--grid); stroke-width: 1; }
 svg .base { stroke: var(--grid-2); stroke-width: 1; }
-svg .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+svg .line { fill: none; stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; filter: var(--glow); }
+svg .area { stroke: none; }
 svg .ref { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
 svg .join { stroke: var(--muted); stroke-width: 1; }
 svg .gap { fill: var(--gap-fill); }
 svg .over { fill: var(--warning); }
 svg .sel { fill: var(--sel-fill); }
-svg .cur { stroke: var(--ink); stroke-width: 1; }
-svg .hov { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: none; opacity: 0.55; visibility: hidden; }
+svg .cur { stroke: var(--ink); stroke-width: 1.25; }
+svg .hov { stroke: var(--ink-2); stroke-width: 1; opacity: 0.5; visibility: hidden; }
 svg .dot { stroke: var(--panel); stroke-width: 2; }
 svg .hit { fill: transparent; cursor: crosshair; touch-action: pan-y; }
 svg .lbl { fill: var(--ink-2); font: 11.5px var(--f-body); }
@@ -191,92 +209,96 @@ svg .zero { stroke: var(--grid-2); stroke-width: 1; }
 
 /* ---- 再生 ---- */
 .transport {
-  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 10px 12px; align-items: center;
-  padding: 10px 14px 14px; border-top: 1px solid var(--ring); margin-top: 6px;
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 10px 14px; align-items: center;
+  padding: 12px 16px 16px; border-top: 1px solid var(--ring); margin-top: 8px;
 }
 .play {
-  width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer; background: var(--ink); color: var(--panel);
-  display: grid; place-items: center;
+  width: 46px; height: 46px; border-radius: 50%; border: 0; cursor: pointer; background: var(--trace-i); color: #fff;
+  display: grid; place-items: center; box-shadow: 0 0 0 4px color-mix(in srgb, var(--trace-i) 22%, transparent);
 }
-.play:hover { filter: brightness(1.15); }
-.play svg { width: 16px; height: 16px; fill: currentColor; }
-.speed { border: 1px solid var(--grid-2); background: var(--panel); border-radius: 6px; padding: 5px 8px; font: 500 12.5px var(--f-mono); }
-.scrub { width: 100%; accent-color: var(--ink); }
-.tc { font: 500 15px var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tc small { color: var(--muted); font-size: 12px; }
+.play:hover { filter: brightness(1.12); }
+.play svg { width: 17px; height: 17px; fill: currentColor; }
+.speed { border: 1px solid var(--grid-2); background: var(--panel); border-radius: 4px; padding: 6px 8px; font: 500 12.5px var(--f-mono); }
+.scrub { width: 100%; accent-color: var(--trace-i); }
+.tc { font: italic 700 22px/1 var(--f-display); font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: 0.02em; }
+.tc small { color: var(--muted); font-size: 15px; }
 @media (max-width: 560px) { .transport { grid-template-columns: auto auto 1fr; } .scrub { grid-column: 1 / -1; order: 5; } }
 
 /* ---- 計器盤 ---- */
 .side { display: grid; gap: 14px; }
-.gauge-wrap { padding: 4px 14px 0; }
-.gauge svg text { font-family: var(--f-mono); }
-.gauge .num { font: 700 46px var(--f-display); fill: var(--ink); }
-.gauge .unit { font: 500 15px var(--f-display); fill: var(--ink-2); letter-spacing: 0.06em; }
+.gauge-wrap { padding: 6px 16px 0; }
+.gauge text { font-family: var(--f-mono); }
+.gauge .gnum { font: italic 800 56px var(--f-display); fill: var(--ink); }
+.gauge .gnum.over { fill: var(--warning); }
+.gauge .unit { font: 500 11px var(--f-mono); fill: var(--muted); letter-spacing: 0.14em; }
 .gauge .tick { stroke: var(--grid-2); stroke-width: 1.5; }
-.gauge .tick.major { stroke: var(--ink-2); stroke-width: 2; }
-.gauge .track { fill: none; stroke: var(--grid); stroke-width: 12; stroke-linecap: butt; }
-.gauge .fill { fill: none; stroke: var(--trace-i); stroke-width: 12; stroke-linecap: butt; }
-.gauge .overzone { fill: none; stroke: var(--warning); stroke-width: 12; }
-.gauge .needle { stroke: var(--ink); stroke-width: 2.5; stroke-linecap: round; }
+.gauge .tick.major { stroke: var(--ink-2); stroke-width: 2.25; }
+.gauge .track { fill: none; stroke: var(--cell-off); stroke-width: 14; }
+.gauge .fill { fill: none; stroke: var(--trace-i); stroke-width: 14; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--trace-i) 60%, transparent)); }
+.gauge .overzone { fill: none; stroke: var(--warning); stroke-width: 14; }
+.gauge .needle { stroke: var(--ink); stroke-width: 3; stroke-linecap: round; }
+.gauge .peak { fill: var(--warning); }
 .gauge .hub { fill: var(--ink); }
+.gauge .hub2 { fill: var(--panel); }
 .live { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--ring); }
-.live .ro { padding: 9px 14px 10px; }
+.live .ro { padding: 10px 16px 11px; }
 .live .ro:nth-child(2n) { border-right: 0; }
-.live .ro .v { font-size: 26px; }
+.live .ro .v { font-size: 27px; }
 .live .ro.wide { grid-column: 1 / -1; border-right: 0; }
 .runs { list-style: none; margin: 0; padding: 6px 0 8px; max-height: 330px; overflow-y: auto; }
 .runs li {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; padding: 7px 14px; cursor: pointer;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; padding: 8px 16px; cursor: pointer;
   border-left: 3px solid transparent;
 }
 .runs li:hover { background: var(--wash); }
-.runs li.active { background: var(--sel-fill); border-left-color: var(--ink); }
+.runs li.active { background: var(--sel-fill); border-left-color: var(--trace-i); }
 .runs .nm { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.runs .fl { grid-column: 2 / 4; color: var(--muted); font: 11px var(--f-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.runs .mah { font: 600 17px var(--f-display); font-variant-numeric: tabular-nums; }
-.runs .mah small { font-size: 12px; color: var(--ink-2); margin-left: 2px; }
-.runs input { width: 16px; height: 16px; accent-color: var(--ink); }
-.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: 0; margin-right: 5px; }
+.runs .fl { grid-column: 2 / 4; color: var(--muted); font: 10.5px var(--f-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runs .mah { font: italic 800 20px var(--f-display); font-variant-numeric: tabular-nums; }
+.runs .mah small { font: italic 600 12px var(--f-display); color: var(--ink-2); margin-left: 2px; }
+.runs input { width: 16px; height: 16px; accent-color: var(--trace-i); }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: 0; margin-right: 6px; transform: skewX(-14deg); }
 
 /* ---- 下の段 ---- */
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 820px) { .cols { grid-template-columns: 1fr; } }
-.cols .body { padding: 6px 14px 12px; }
+.cols .body { padding: 6px 16px 14px; }
 .tablewrap { overflow-x: auto; padding: 6px 4px 10px; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-th, td { padding: 7px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
-th { font: 500 11px var(--f-mono); letter-spacing: 0.05em; color: var(--muted); text-transform: uppercase; }
+th, td { padding: 8px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+th { font: 500 10.5px var(--f-mono); letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase; }
 td { font: 13px var(--f-mono); }
 th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
 td:nth-child(2) { font-family: var(--f-body); font-weight: 600; }
+td:nth-child(4) { font: italic 800 18px var(--f-display); }
 tbody tr { cursor: pointer; }
 tbody tr:hover { background: var(--wash); }
 tbody tr.active { background: var(--sel-fill); }
 .tip {
-  position: fixed; pointer-events: none; z-index: 40; display: none; background: var(--panel); color: var(--ink);
-  border: 1px solid var(--ring); border-radius: 8px; padding: 8px 10px; font: 12px var(--f-mono);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16); white-space: nowrap; font-variant-numeric: tabular-nums;
+  position: fixed; pointer-events: none; z-index: 40; display: none; background: var(--panel-2); color: var(--ink);
+  border: 1px solid var(--ring); border-radius: 6px; padding: 8px 11px; font: 12px var(--f-mono);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); white-space: nowrap; font-variant-numeric: tabular-nums;
 }
-.tip .t { color: var(--ink-2); margin-bottom: 3px; }
-.tip td { padding: 1px 0 1px 12px; border: 0; text-align: right; font-size: 12px; }
-.tip td:first-child { padding-left: 0; text-align: left; color: var(--ink-2); font-family: var(--f-body); }
+.tip .t { color: var(--ink-2); margin-bottom: 4px; }
+.tip td { padding: 1px 0 1px 14px; border: 0; text-align: right; font: 12px var(--f-mono); }
+.tip td:first-child { padding-left: 0; text-align: left; color: var(--ink-2); font-family: var(--f-body); font-weight: 400; }
 .drop-veil {
-  position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: rgba(12, 18, 22, 0.55);
-  color: #fff; font: 600 28px var(--f-display); letter-spacing: 0.06em;
+  position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: rgba(9, 13, 18, 0.7);
+  color: #fff; font: italic 800 34px var(--f-display); letter-spacing: 0.06em;
 }
 body.dragging .drop-veil { display: grid; }
 footer { color: var(--muted); font-size: 12.5px; }
 footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
-@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
 </style>
 </head>
 <body>
 <header class="bar">
   <div class="bar-in">
-    <div class="brand"><span class="mark" aria-hidden="true"></span><div><b>Ene-1 Telemetry</b><br><small>Ene1PowerMeter · LOG***.CSV · 50ms</small></div></div>
+    <div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i></span><div><b>Ene-1 Telemetry</b><small>Ene1PowerMeter · LOG***.CSV · 50ms · INA228</small></div></div>
     <div class="budget" title="使える量とレース時間を入れると、均等に使い切る線と予算との差を出します">
-      <label for="budget">予算</label><input type="number" id="budget" min="0" step="10" placeholder="2000"><span>mAh</span>
-      <label for="race">レース</label><input type="number" id="race" min="0" step="1" placeholder="60"><span>分</span>
+      <label for="budget">BUDGET</label><input type="number" id="budget" min="0" step="10" placeholder="2000"><span>mAh</span>
+      <label for="race">RACE</label><input type="number" id="race" min="0" step="1" placeholder="60"><span>分</span>
     </div>
     <label class="btn primary">CSV を開く<input type="file" id="fileOpen" multiple accept=".csv,.CSV,text/csv"></label>
     <label class="btn">ログを追加<input type="file" id="fileAdd" multiple accept=".csv,.CSV,text/csv"></label>
@@ -303,6 +325,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
             <button type="button" id="zoomOut" disabled>全体を表示</button>
           </div>
         </div>
+        <div class="battery" id="battery" aria-live="off"></div>
         <div class="readout" id="readout"></div>
         <div class="charts" id="charts"></div>
         <div class="transport">
@@ -319,7 +342,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       <aside class="side">
         <section class="panel gauge" aria-labelledby="gaugeTitle">
           <div class="panel-h"><div><div class="eyebrow">カーソルの位置</div><h2 id="gaugeTitle">計器盤</h2></div><span class="tc" id="gaugeTime">00:00</span></div>
-          <div class="gauge-wrap"><svg id="gauge" viewBox="0 0 280 214" role="img" aria-label="電流計"></svg></div>
+          <div class="gauge-wrap"><svg id="gauge" viewBox="0 0 280 222" role="img" aria-label="電流計"></svg></div>
           <div class="live" id="live"></div>
         </section>
         <section class="panel" aria-labelledby="runsTitle">
@@ -571,14 +594,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     $('scopeLabel').textContent = range ? `${state.sel ? '選んだ範囲' : '拡大中'} ${C.fmtTime(s.t0)}–${C.fmtTime(s.t1)}` : '走行全体';
     $('zoomIn').disabled = !state.sel; $('clearSel').disabled = !state.sel; $('zoomOut').disabled = !state.view;
     const out = [];
-    out.push(ro('使用量', s.mAh.toFixed(0), 'mAh', `${C.fmtTime(s.duration)} の間`, 'hero'));
-    const B = budget(), R = raceS();
-    if (B && R && !range) {
-      const p = C.pace(r, B, R);
-      const over = p.diff > 0;
-      out.push(ro('予算との差', `${over ? '+' : '−'}${Math.abs(p.diff).toFixed(0)}`, 'mAh',
-        `<span class="chip ${over ? 'over' : 'under'}">${over ? '▲ 使いすぎ' : '▼ 余裕あり'}</span> 理想 ${p.ideal.toFixed(0)}`, 'hero'));
-    }
+    out.push(ro(range ? '範囲の使用量' : '使用量', s.mAh.toFixed(0), 'mAh', `${C.fmtTime(s.duration)} の間`));
     out.push(ro('平均電流', s.avgA.toFixed(2), 'A', `平均電力 ${s.avgW.toFixed(0)} W`));
     out.push(ro('最大電流', s.peakA.toFixed(1), 'A', `${C.fmtTime(s.peakAt)} の時点`));
     out.push(ro('最低電圧', s.minV.toFixed(2), 'V', `最高 ${s.maxV.toFixed(2)} V`));
@@ -692,7 +708,21 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
         g += `<path class="line" d="${path}" clip-path="url(#cpD)" style="stroke:var(--under)"/>`;
         g += `<text class="lbl" x="${M.l + 6}" y="${M.t + 12}">▲ 使いすぎ</text><text class="lbl" x="${M.l + 6}" y="${M.t + ph - 5}">▼ 余裕あり</text>`;
       } else {
-        g += `<path class="line" d="${path}" style="stroke:${c.color}"/>`;
+        if (c.key === 'i' || c.key === 'p') {
+          // 線の下を、上から下へ薄くなる色で塗る (記録の抜けごとに区切る)
+          const base = Y(Math.max(yLo, 0)).toFixed(1);
+          let area = '', start = null, lastX = null;
+          for (let k = 0; k < d.length; k++) {
+            const x = X(d[k].t).toFixed(1), yv = Y(d[k].y).toFixed(1);
+            if (k === 0 || d[k].gap) { if (start !== null) area += `L${lastX},${base}Z`; area += `M${x},${base}L${x},${yv}`; start = x; }
+            else area += `L${x},${yv}`;
+            lastX = x;
+          }
+          if (start !== null) area += `L${lastX},${base}Z`;
+          g += `<defs><linearGradient id="grad${c.key}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:${c.color};stop-opacity:0.42"/><stop offset="1" style="stop-color:${c.color};stop-opacity:0.02"/></linearGradient></defs>`;
+          g += `<path class="area" d="${area}" fill="url(#grad${c.key})"/>`;
+        }
+        g += `<path class="line" d="${path}" style="stroke:${c.color};color:${c.color}"/>`;
       }
       if (c.key === 'q' && pace) {
         const tEnd = Math.min(tB, r.t[0] + R), t0 = Math.max(tA, r.t[0]);
@@ -746,7 +776,9 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     const span = r.t[r.t.length - 1] - r.t[0] || 1;
     $('scrub').value = Math.round((r.t[kc] - r.t[0]) / span * 1000);
     $('tc').innerHTML = `${C.fmtTime(r.t[kc] - r.t[0])} <small>/ ${C.fmtTime(span)}</small>`;
-    renderLive(state.hover !== null ? idxAt(state.hover) : kc);
+    const kl = state.hover !== null ? idxAt(state.hover) : kc;
+    renderLive(kl);
+    renderBattery(kl);
   }
 
   function bindCharts() {
@@ -846,8 +878,42 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
   });
 
   // ---------------------------------------------------------------------------
+  //  電池の帯 (カーソルの位置までに使った量と、予算どおりに使ったときの位置)
+  const CELLS = 40;
+  function renderBattery(k) {
+    const r = run(), B = budget(), R = raceS();
+    const used = r.q[k] - r.q[0], el = r.t[k] - r.t[0];
+    const avg = el > 0 ? used * 3.6 / el : 0;
+    const left = `<div><div class="bat-k">Used · 使用量</div><div class="bat-big">${used.toFixed(0)}<small>mAh</small></div>
+      <div class="bat-sub">${C.fmtTime(el)} 時点 · 平均 ${avg.toFixed(2)} A</div></div>`;
+    if (!(B && R)) {
+      $('battery').innerHTML = left + `<div class="bat-cells"><div class="bat-empty">上の <b>BUDGET</b> と <b>RACE</b> に、使える量 (mAh) とレース時間 (分) を入れると、電池の使い方をここに出します。</div></div>
+        <div class="bat-delta"><div class="bat-k">Elapsed · 経過</div><div class="bat-big">${C.fmtTime(el)}</div></div>`;
+      return;
+    }
+    const frac = used / B, ideal = Math.min(el, R) / R;
+    let cells = '';
+    for (let i = 0; i < CELLS; i++) {
+      const a = i / CELLS, b = (i + 1) / CELLS;
+      if (frac >= b) cells += `<i class="${a >= ideal - 1e-9 ? 'over' : 'on'}"></i>`;
+      else if (frac > a) cells += `<i class="part" style="--p:${((frac - a) * CELLS * 100).toFixed(0)}%"></i>`;
+      else cells += '<i></i>';
+    }
+    const p = C.pace(r, B, R, k), over = p.diff > 0;
+    const idealMah = B * ideal;
+    cells += `<div class="ideal${ideal > 0.8 ? ' flip' : ''}" style="left:${(ideal * 100).toFixed(2)}%"><span>IDEAL ${idealMah.toFixed(0)}</span></div>`;
+    const need = p.finished ? `予算 ${B} mAh のうち ${Math.max(0, p.remainMah).toFixed(0)} 残し` : `残り ${C.fmtTime(p.remainS)} を ${Math.max(0, p.needA).toFixed(2)} A で走れば使い切る`;
+    $('battery').innerHTML = left + `<div class="bat-cells"><div class="bat-k">Battery budget · ${B} mAh / ${R / 60} 分</div>
+        <div class="cells" role="img" aria-label="予算 ${B} mAh のうち ${used.toFixed(0)} mAh を使用。予算どおりなら ${idealMah.toFixed(0)} mAh">${cells}</div>
+        <div class="scale"><span>0</span><span>${(B / 2).toFixed(0)}</span><span>${B} mAh</span></div></div>
+      <div class="bat-delta ${over ? 'over' : 'under'}"><div class="bat-k">vs Pace · 予算との差</div>
+        <div class="bat-big">${over ? '+' : '−'}${Math.abs(p.diff).toFixed(0)}<small>mAh</small></div>
+        <div class="bat-sub">${over ? '▲ 使いすぎ' : '▼ 余裕あり'} · ${need}</div></div>`;
+  }
+
+  // ---------------------------------------------------------------------------
   //  計器盤 (カーソルの位置の値)
-  const G = { cx: 140, cy: 128, r: 104, a0: Math.PI * 1.08, a1: Math.PI * -0.08 };
+  const G = { cx: 140, cy: 132, r: 102, a0: Math.PI * 1.08, a1: Math.PI * -0.08 };
   const gAngle = (a) => G.a0 + (G.a1 - G.a0) * Math.max(0, Math.min(1, a / MAX_A));
   const gPt = (ang, rr) => [G.cx + rr * Math.cos(ang), G.cy - rr * Math.sin(ang)];
   function arc(aFrom, aTo, rr) {
@@ -863,8 +929,9 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       if (major) { const pl = gPt(ang, G.r - 34); g += `<text x="${pl[0].toFixed(1)}" y="${pl[1].toFixed(1)}" dy="0.35em" text-anchor="middle">${a}</text>`; }
     }
     g += `<text x="${gPt(gAngle(19), G.r - 46)[0].toFixed(1)}" y="${gPt(gAngle(19), G.r - 46)[1].toFixed(1)}" text-anchor="middle" style="fill:var(--ink-2);font-size:10px">OVER</text>`;
-    g += `<line class="needle" id="gNeedle" x1="${G.cx}" y1="${G.cy}" x2="${G.cx}" y2="${G.cy - G.r + 18}"/><circle class="hub" cx="${G.cx}" cy="${G.cy}" r="6"/>`;
-    g += `<text class="num" id="gNum" x="${G.cx}" y="${G.cy + 58}" text-anchor="middle">0.00</text><text class="unit" x="${G.cx}" y="${G.cy + 80}" text-anchor="middle">A · 電流</text>`;
+    g += `<path class="peak" id="gPeak" d=""/>`;
+    g += `<line class="needle" id="gNeedle" x1="${G.cx}" y1="${G.cy}" x2="${G.cx}" y2="${G.cy - G.r + 18}"/><circle class="hub" cx="${G.cx}" cy="${G.cy}" r="8"/><circle class="hub2" cx="${G.cx}" cy="${G.cy}" r="3"/>`;
+    g += `<text class="gnum" id="gNum" x="${G.cx}" y="${G.cy + 62}" text-anchor="middle">0.00</text><text class="unit" id="gUnit" x="${G.cx}" y="${G.cy + 84}" text-anchor="middle">CURRENT · A</text>`;
     $('gauge').innerHTML = g;
   }
   function renderLive(k) {
@@ -875,6 +942,12 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     nd.setAttribute('x2', tip[0].toFixed(1)); nd.setAttribute('y2', tip[1].toFixed(1));
     $('gFill').setAttribute('d', a > 0.01 ? arc(0, Math.min(a, MAX_A), G.r) : '');
     $('gNum').textContent = a >= C.DEFAULT_OVER_A ? 'OVER' : a.toFixed(2);
+    $('gNum').classList.toggle('over', a >= C.DEFAULT_OVER_A);
+    // ピークホールド: 走行の始めからカーソルまでの最大電流に印
+    if (!r._peak) { r._peak = new Float64Array(r.t.length); let m = -Infinity; for (let j = 0; j < r.t.length; j++) { m = Math.max(m, r.i[j]); r._peak[j] = m; } }
+    const pk = r._peak[k], pa = gAngle(pk), o1 = gPt(pa, G.r + 10), o2 = gPt(pa - 0.05, G.r + 19), o3 = gPt(pa + 0.05, G.r + 19);
+    $('gPeak').setAttribute('d', `M${o1[0].toFixed(1)},${o1[1].toFixed(1)}L${o2[0].toFixed(1)},${o2[1].toFixed(1)}L${o3[0].toFixed(1)},${o3[1].toFixed(1)}Z`);
+    $('gUnit').textContent = `CURRENT · A   PEAK ${pk.toFixed(1)}`;
     $('gaugeTime').textContent = C.fmtTime(r.t[k] - r.t[0]);
     const cells = [];
     cells.push(ro('電圧', r.v[k].toFixed(2), 'V'));
