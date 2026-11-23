@@ -152,8 +152,12 @@
     // ドライバー
     cruiseKmh: 120,        // 平らな所で保つ速さ (大きくすると、出せる限りの全開)
     accel: 1.0,            // 目標の速さまでの加速 [m/s^2] (モーターの力で頭打ちになる)
-    brakeDecel: 2.5,       // カーブ手前のブレーキ [m/s^2]
-    maxCoastKmh: 85,       // 下りで惰性で出してよい速さ
+    brakeDecel: 2.5,       // シケイン手前のブレーキ [m/s^2]
+    // チームの運転: ブレーキは最後のシケインだけで、シケインは 40km/h で曲がる。ほかのカーブと下りでは
+    // ブレーキを使わない。false にすると、すべてのカーブを半径と latG から決まる速さまで落とす
+    brakeOnlyAtChicane: true,
+    chicaneKmh: 40,
+    maxCoastKmh: 85,       // brakeOnlyAtChicane が false のとき、下りで出してよい速さ
     holdOnClimb: true,     // 上りでも速さを保とうとする
     coastBelowGrade: null, // この勾配より急な下り (例 -0.01 = -1%) ではアクセルを戻して惰性で走る (null = 戻さない)
     // 大会
@@ -182,8 +186,17 @@
     return name;
   }
 
+  // シケイン (R9.5 から R20 まで) の範囲
+  const CHICANE = { from: 5095, to: 5167 };
+
   // 距離 d (1 周の中) で出してよい速さ [m/s] (この先のカーブに間に合うブレーキも考える)
   function speedLimit(d, p) {
+    if (p.brakeOnlyAtChicane) {
+      const cap = p.chicaneKmh / 3.6;
+      if (d >= CHICANE.from && d <= CHICANE.to) return cap;
+      if (d < CHICANE.from) return Math.sqrt(cap * cap + 2 * p.brakeDecel * (CHICANE.from - d));
+      return Infinity;
+    }
     let lim = p.maxCoastKmh / 3.6;
     for (const c of CORNERS) {
       const cap = cornerKmh(c, p) / 3.6;
