@@ -2,289 +2,413 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ene-1 ログビューア</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ene-1 テレメトリー</title>
+<meta name="claude:viewport-fit-sides" content="cover">
 <!--
-  Ene1PowerMeter の SD カードの CSV (LOG000.CSV …) をグラフと数字で振り返る。
-  インターネットにつながっていなくても動く (外部のライブラリやフォントを読み込まない)。
+  Ene1PowerMeter の SD カードの CSV (LOG000.CSV …) を、ピットのテレメトリー画面のように振り返る。
   このファイルと logviewer-core.js を同じフォルダに置き、ブラウザで開くだけで使える。
+  フォントは Google Fonts から読むが、オフラインでも端末のフォントで動く。データは端末の外に送らない。
 -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
+/* レイアウト: 記録紙 (グラフ用紙) の上に、時間軸をそろえたストリップチャートを積み、右に計器盤を置く */
 :root {
   color-scheme: light;
-  --page: #f9f9f7;
-  --surface: #fcfcfb;
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --muted: #898781;
-  --grid: #e1e0d9;
-  --axis: #c3c2b7;
-  --ring: rgba(11, 11, 11, 0.10);
-  --wash: rgba(11, 11, 11, 0.04);
+  --paper: #eef1ef;         /* 記録紙の地 */
+  --panel: #f9fbfa;         /* 計器盤・チャートの面 */
+  --ink: #111a20;           /* 文字 */
+  --ink-2: #47535c;         /* 補助の文字 */
+  --muted: #84909a;         /* 目盛り */
+  --grid: #dde4e1;          /* 細い格子 */
+  --grid-2: #c5cfcb;        /* 太い格子・軸 */
+  --ring: rgba(17, 26, 32, 0.10);
+  --wash: rgba(17, 26, 32, 0.045);
+  --trace-i: #2a78d6;       /* 電流 */
+  --trace-v: #1baf7a;       /* 電圧 */
+  --trace-p: #eb6834;       /* 電力 */
+  --trace-q: #6250d6;       /* 積算 */
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
   --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --over: #e34948;          /* 予算より使いすぎ */
+  --under: #2a78d6;         /* 予算より余裕 */
   --warning: #fab219;
   --critical: #d03b3b;
   --good-text: #006300;
-  --gap-fill: rgba(137, 135, 129, 0.16);
+  --bad-text: #b42323;
+  --gap-fill: rgba(132, 144, 154, 0.18);
   --sel-fill: rgba(42, 120, 214, 0.12);
+  --bar: #111a20;           /* 上のバー */
+  --bar-ink: #eef1ef;
+  --f-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  --f-body: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
-    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10); --wash: rgba(255, 255, 255, 0.05);
+    --paper: #0c1216; --panel: #121a20; --ink: #e7edef; --ink-2: #b1bec5; --muted: #76858e;
+    --grid: #1c262d; --grid-2: #2a3740; --ring: rgba(255, 255, 255, 0.09); --wash: rgba(255, 255, 255, 0.05);
+    --trace-i: #3987e5; --trace-v: #199e70; --trace-p: #d95926; --trace-q: #9085e9;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
-    --good-text: #0ca30c; --gap-fill: rgba(137, 135, 129, 0.20); --sel-fill: rgba(57, 135, 229, 0.18);
+    --over: #e66767; --under: #3987e5; --good-text: #2fbf4a; --bad-text: #f08080;
+    --gap-fill: rgba(118, 133, 142, 0.22); --sel-fill: rgba(57, 135, 229, 0.18);
+    --bar: #05090c; --bar-ink: #e7edef;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
-  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10); --wash: rgba(255, 255, 255, 0.05);
+  --paper: #0c1216; --panel: #121a20; --ink: #e7edef; --ink-2: #b1bec5; --muted: #76858e;
+  --grid: #1c262d; --grid-2: #2a3740; --ring: rgba(255, 255, 255, 0.09); --wash: rgba(255, 255, 255, 0.05);
+  --trace-i: #3987e5; --trace-v: #199e70; --trace-p: #d95926; --trace-q: #9085e9;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
-  --good-text: #0ca30c; --gap-fill: rgba(137, 135, 129, 0.20); --sel-fill: rgba(57, 135, 229, 0.18);
+  --over: #e66767; --under: #3987e5; --good-text: #2fbf4a; --bad-text: #f08080;
+  --gap-fill: rgba(118, 133, 142, 0.22); --sel-fill: rgba(57, 135, 229, 0.18);
+  --bar: #05090c; --bar-ink: #e7edef;
 }
+
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
-  margin: 0; background: var(--page); color: var(--ink);
-  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  margin: 0; color: var(--ink); font: 14px/1.55 var(--f-body);
+  background-color: var(--paper);
+  /* 記録紙の格子 (1 マス 8px、5 マスごとに太線) */
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 8px 8px;
 }
-.wrap { max-width: 1120px; margin: 0 auto; padding: 20px 16px 48px; }
-h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: 0.01em; }
-h2 { font-size: 15px; margin: 0 0 10px; }
-.sub { color: var(--ink-2); margin: 0 0 16px; }
-.card {
-  background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
-  padding: 14px 16px; margin: 0 0 14px;
+body::before {
+  content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bar);
 }
-.row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
-button, .btn {
-  font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--axis);
-  border-radius: 7px; padding: 6px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+:focus-visible { outline: 2px solid var(--trace-i); outline-offset: 2px; }
+button, select, input { font: inherit; color: inherit; }
+
+/* ---- 上のバー ---- */
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--bar); color: var(--bar-ink);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
 }
-button:hover, .btn:hover { background: var(--wash); }
-button.primary, .btn.primary { background: var(--s1); border-color: var(--s1); color: #fff; }
-button.primary:hover, .btn.primary:hover { filter: brightness(1.08); }
-button:disabled { opacity: 0.45; cursor: default; }
-.btn input { display: none; }
-label.field { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
-label.field input {
-  font: inherit; width: 90px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--axis);
-  background: var(--surface); color: var(--ink); font-variant-numeric: tabular-nums;
+.bar-in { max-width: 1320px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding-block: 10px; }
+.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.brand .mark {
+  width: 26px; height: 26px; border-radius: 6px; flex: none;
+  background: conic-gradient(from 200deg, var(--trace-i) 0 62%, var(--warning) 62% 70%, transparent 70%);
+  -webkit-mask: radial-gradient(circle at 50% 60%, transparent 5px, #000 5.5px); mask: radial-gradient(circle at 50% 60%, transparent 5px, #000 5.5px);
 }
+.brand b { font: 700 21px/1 var(--f-display); letter-spacing: 0.06em; text-transform: uppercase; }
+.brand small { font: 500 11px/1 var(--f-mono); opacity: 0.6; letter-spacing: 0.04em; }
+.bar .btn {
+  border: 1px solid rgba(255, 255, 255, 0.22); background: transparent; color: var(--bar-ink);
+  border-radius: 6px; padding: 6px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.bar .btn:hover { background: rgba(255, 255, 255, 0.08); }
+.bar .btn.primary { background: var(--trace-i); border-color: var(--trace-i); color: #fff; }
+.bar .btn.primary:hover { filter: brightness(1.1); }
+.btn input[type=file] { display: none; }
+.budget { display: flex; align-items: center; gap: 8px; font: 500 12px var(--f-mono); color: rgba(231, 237, 239, 0.75); flex-wrap: wrap; }
+.budget input {
+  width: 72px; padding: 5px 7px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.06); color: var(--bar-ink); font: 500 13px var(--f-mono); text-align: right;
+}
+:root[data-theme="light"] .bar .budget, :root[data-theme="light"] .bar .btn:not(.primary) { color: #e7edef; }
+
+/* ---- 本体 ---- */
+.page { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 40px; }
+.wrap { max-width: 1320px; margin: 0 auto; display: grid; gap: 14px; }
+.notice {
+  padding: 8px 12px; border-radius: 8px;
+  background: var(--panel); border: 1px dashed var(--grid-2); color: var(--ink-2); font-size: 13px;
+}
+.notice.warn::before { content: "⚠ "; color: var(--warning); }
+.notice b { color: var(--ink); }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; align-items: start; }
+@media (max-width: 980px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--ring); border-radius: 10px; min-width: 0; }
+.panel-h {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px;
+  padding: 12px 14px 0;
+}
+.eyebrow { font: 500 11px/1.2 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+h2 { margin: 0; font: 600 19px/1.15 var(--f-display); letter-spacing: 0.03em; text-wrap: balance; }
 .hint { color: var(--muted); font-size: 12.5px; }
-.drop {
-  border: 1.5px dashed var(--axis); border-radius: 10px; padding: 28px 16px; text-align: center;
-  color: var(--ink-2); margin-bottom: 14px;
+
+/* ---- 走行の数字 (読み取り帯) ---- */
+.readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); border-top: 1px solid var(--ring); margin-top: 10px; }
+.ro { padding: 10px 14px 12px; border-right: 1px solid var(--ring); border-bottom: 1px solid var(--ring); min-width: 0; }
+.ro .k { font: 500 11px/1.2 var(--f-mono); letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; }
+.ro .k span { text-transform: none; letter-spacing: 0; font-family: var(--f-body); }
+.ro .v { font: 600 34px/1.05 var(--f-display); letter-spacing: 0.01em; margin-top: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ro .v small { font: 500 15px var(--f-display); color: var(--ink-2); margin-left: 3px; letter-spacing: 0.04em; }
+.ro .d { color: var(--ink-2); font-size: 12px; margin-top: 2px; }
+.ro.hero .v { font-size: 46px; }
+.ro.status { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding-block: 8px; border-right: 0; }
+.ro.status .chip { white-space: normal; }
+.ro .good { color: var(--good-text); } .ro .bad { color: var(--bad-text); }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; font: 500 11.5px/1.6 var(--f-mono);
+  border: 1px solid var(--ring); background: var(--wash); color: var(--ink-2); white-space: nowrap;
 }
-body.dragging .drop { border-color: var(--s1); background: var(--sel-fill); }
-.msg { margin: 8px 0 0; color: var(--ink-2); }
-.msg.warn::before { content: "⚠ "; color: var(--warning); }
+.chip.warn::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+.chip.over { color: var(--bad-text); } .chip.under { color: var(--good-text); }
+.scope { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.scope button {
+  border: 1px solid var(--grid-2); background: var(--panel); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12.5px;
+}
+.scope button:hover { background: var(--wash); }
+.scope button:disabled { opacity: 0.4; cursor: default; }
 
-/* 走行の一覧 */
-.tablewrap { overflow-x: auto; margin: 0 -4px; }
-table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-th, td { padding: 6px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
-th { color: var(--ink-2); font-weight: 600; font-size: 12.5px; }
-th:nth-child(-n+3), td:nth-child(-n+3) { text-align: left; }
-tbody tr { cursor: pointer; }
-tbody tr:hover { background: var(--wash); }
-tbody tr.active { background: var(--sel-fill); }
-.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
-.files { color: var(--muted); font-size: 12px; }
-
-/* 数字のまとめ */
-.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.tile { border: 1px solid var(--ring); border-radius: 8px; padding: 10px 12px; background: var(--surface); }
-.tile .k { color: var(--ink-2); font-size: 12.5px; }
-.tile .v { font-size: 22px; font-weight: 600; line-height: 1.25; margin-top: 2px; }
-.tile .v small { font-size: 13px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
-.tile .d { color: var(--muted); font-size: 12px; margin-top: 2px; }
-.tile.over .k::before { content: "⚠ "; color: var(--warning); }
-.tile .good { color: var(--good-text); }
-.tile .bad { color: var(--critical); }
-.rangebar { display: none; margin: 0 0 10px; }
-.rangebar.on { display: flex; }
-
-/* グラフ */
-.chart { position: relative; margin-bottom: 6px; }
-.chart .title { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.chart .title b { font-size: 13px; }
-.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-2); font-size: 12.5px; }
+/* ---- ストリップチャート ---- */
+.charts { padding: 6px 14px 4px; }
+.strip { position: relative; }
+.strip-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.strip-h b { font: 600 14px var(--f-display); letter-spacing: 0.05em; text-transform: uppercase; display: inline-flex; align-items: center; gap: 7px; }
+.strip-h b i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.strip-h b span { font: 400 12px var(--f-body); text-transform: none; letter-spacing: 0; color: var(--ink-2); }
+.legend { display: flex; flex-wrap: wrap; gap: 3px 12px; color: var(--ink-2); font-size: 12px; }
 .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: 4px; margin-right: 5px; border-radius: 1px; }
-.legend i.box { height: 10px; width: 10px; vertical-align: -1px; border-radius: 2px; }
+.legend i.box { height: 9px; width: 9px; vertical-align: -1px; border-radius: 2px; }
 svg { display: block; width: 100%; overflow: visible; }
-svg text { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); font-variant-numeric: tabular-nums; }
+svg text { font: 11px var(--f-mono); fill: var(--muted); font-variant-numeric: tabular-nums; }
 svg .grid { stroke: var(--grid); stroke-width: 1; }
-svg .base { stroke: var(--axis); stroke-width: 1; }
+svg .base { stroke: var(--grid-2); stroke-width: 1; }
 svg .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 svg .ref { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
 svg .join { stroke: var(--muted); stroke-width: 1; }
 svg .gap { fill: var(--gap-fill); }
 svg .over { fill: var(--warning); }
 svg .sel { fill: var(--sel-fill); }
-svg .xh { stroke: var(--ink-2); stroke-width: 1; visibility: hidden; }
-svg .dot { stroke: var(--surface); stroke-width: 2; visibility: hidden; }
+svg .cur { stroke: var(--ink); stroke-width: 1; }
+svg .hov { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: none; opacity: 0.55; visibility: hidden; }
+svg .dot { stroke: var(--panel); stroke-width: 2; }
 svg .hit { fill: transparent; cursor: crosshair; touch-action: pan-y; }
-svg .lbl { fill: var(--ink-2); font-size: 11.5px; }
-svg .bar:hover { opacity: 0.8; }
+svg .lbl { fill: var(--ink-2); font: 11.5px var(--f-body); }
+svg .zero { stroke: var(--grid-2); stroke-width: 1; }
+
+/* ---- 再生 ---- */
+.transport {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 10px 12px; align-items: center;
+  padding: 10px 14px 14px; border-top: 1px solid var(--ring); margin-top: 6px;
+}
+.play {
+  width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer; background: var(--ink); color: var(--panel);
+  display: grid; place-items: center;
+}
+.play:hover { filter: brightness(1.15); }
+.play svg { width: 16px; height: 16px; fill: currentColor; }
+.speed { border: 1px solid var(--grid-2); background: var(--panel); border-radius: 6px; padding: 5px 8px; font: 500 12.5px var(--f-mono); }
+.scrub { width: 100%; accent-color: var(--ink); }
+.tc { font: 500 15px var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tc small { color: var(--muted); font-size: 12px; }
+@media (max-width: 560px) { .transport { grid-template-columns: auto auto 1fr; } .scrub { grid-column: 1 / -1; order: 5; } }
+
+/* ---- 計器盤 ---- */
+.side { display: grid; gap: 14px; }
+.gauge-wrap { padding: 4px 14px 0; }
+.gauge svg text { font-family: var(--f-mono); }
+.gauge .num { font: 700 46px var(--f-display); fill: var(--ink); }
+.gauge .unit { font: 500 15px var(--f-display); fill: var(--ink-2); letter-spacing: 0.06em; }
+.gauge .tick { stroke: var(--grid-2); stroke-width: 1.5; }
+.gauge .tick.major { stroke: var(--ink-2); stroke-width: 2; }
+.gauge .track { fill: none; stroke: var(--grid); stroke-width: 12; stroke-linecap: butt; }
+.gauge .fill { fill: none; stroke: var(--trace-i); stroke-width: 12; stroke-linecap: butt; }
+.gauge .overzone { fill: none; stroke: var(--warning); stroke-width: 12; }
+.gauge .needle { stroke: var(--ink); stroke-width: 2.5; stroke-linecap: round; }
+.gauge .hub { fill: var(--ink); }
+.live { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--ring); }
+.live .ro { padding: 9px 14px 10px; }
+.live .ro:nth-child(2n) { border-right: 0; }
+.live .ro .v { font-size: 26px; }
+.live .ro.wide { grid-column: 1 / -1; border-right: 0; }
+.runs { list-style: none; margin: 0; padding: 6px 0 8px; max-height: 330px; overflow-y: auto; }
+.runs li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; padding: 7px 14px; cursor: pointer;
+  border-left: 3px solid transparent;
+}
+.runs li:hover { background: var(--wash); }
+.runs li.active { background: var(--sel-fill); border-left-color: var(--ink); }
+.runs .nm { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runs .fl { grid-column: 2 / 4; color: var(--muted); font: 11px var(--f-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runs .mah { font: 600 17px var(--f-display); font-variant-numeric: tabular-nums; }
+.runs .mah small { font-size: 12px; color: var(--ink-2); margin-left: 2px; }
+.runs input { width: 16px; height: 16px; accent-color: var(--ink); }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: 0; margin-right: 5px; }
+
+/* ---- 下の段 ---- */
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 820px) { .cols { grid-template-columns: 1fr; } }
+.cols .body { padding: 6px 14px 12px; }
+.tablewrap { overflow-x: auto; padding: 6px 4px 10px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 7px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+th { font: 500 11px var(--f-mono); letter-spacing: 0.05em; color: var(--muted); text-transform: uppercase; }
+td { font: 13px var(--f-mono); }
+th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
+td:nth-child(2) { font-family: var(--f-body); font-weight: 600; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--wash); }
+tbody tr.active { background: var(--sel-fill); }
 .tip {
-  position: fixed; pointer-events: none; z-index: 10; display: none;
-  background: var(--surface); color: var(--ink); border: 1px solid var(--ring); border-radius: 8px;
-  padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  font-variant-numeric: tabular-nums; white-space: nowrap;
+  position: fixed; pointer-events: none; z-index: 40; display: none; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--ring); border-radius: 8px; padding: 8px 10px; font: 12px var(--f-mono);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16); white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 .tip .t { color: var(--ink-2); margin-bottom: 3px; }
-.tip td { padding: 1px 0 1px 10px; border: 0; text-align: right; }
-.tip td:first-child { padding-left: 0; text-align: left; color: var(--ink-2); }
-.hidden { display: none !important; }
-.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.cols > .card { margin: 0; min-width: 0; }
-@media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
-footer { color: var(--muted); font-size: 12.5px; margin-top: 18px; }
-footer li { margin: 2px 0; }
+.tip td { padding: 1px 0 1px 12px; border: 0; text-align: right; font-size: 12px; }
+.tip td:first-child { padding-left: 0; text-align: left; color: var(--ink-2); font-family: var(--f-body); }
+.drop-veil {
+  position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: rgba(12, 18, 22, 0.55);
+  color: #fff; font: 600 28px var(--f-display); letter-spacing: 0.06em;
+}
+body.dragging .drop-veil { display: grid; }
+footer { color: var(--muted); font-size: 12.5px; }
+footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Ene-1 ログビューア</h1>
-  <p class="sub">Ene1PowerMeter の SD カードの CSV（LOG000.CSV …）を読み込んで、走行を振り返ります。データはこの端末の外には送られません。</p>
-
-  <div class="drop" id="drop">
-    <div class="row" style="justify-content:center">
-      <label class="btn primary">CSV を開く<input type="file" id="fileOpen" multiple accept=".csv,.CSV,text/csv"></label>
-      <label class="btn">別の日のログを追加<input type="file" id="fileAdd" multiple accept=".csv,.CSV,text/csv"></label>
-      <button id="sample">サンプルで試す</button>
+<header class="bar">
+  <div class="bar-in">
+    <div class="brand"><span class="mark" aria-hidden="true"></span><div><b>Ene-1 Telemetry</b><br><small>Ene1PowerMeter · LOG***.CSV · 50ms</small></div></div>
+    <div class="budget" title="使える量とレース時間を入れると、均等に使い切る線と予算との差を出します">
+      <label for="budget">予算</label><input type="number" id="budget" min="0" step="10" placeholder="2000"><span>mAh</span>
+      <label for="race">レース</label><input type="number" id="race" min="0" step="1" placeholder="60"><span>分</span>
     </div>
-    <p class="hint" style="margin:10px 0 0">ここにファイルをドラッグしても開けます。SD カードのファイルをまとめて選ぶと、Nano のリセットで分かれたファイルは 1 つの走行につなぎます。</p>
-    <p class="msg hidden" id="msg"></p>
+    <label class="btn primary">CSV を開く<input type="file" id="fileOpen" multiple accept=".csv,.CSV,text/csv"></label>
+    <label class="btn">ログを追加<input type="file" id="fileAdd" multiple accept=".csv,.CSV,text/csv"></label>
+    <button class="btn" id="sample" type="button">サンプル</button>
   </div>
+</header>
 
-  <div class="card">
-    <div class="row">
-      <h2 style="margin:0 8px 0 0">ペース配分</h2>
-      <label class="field">使える量 <input type="number" id="budget" min="0" step="10" placeholder="例 2000"> mAh</label>
-      <label class="field">レース時間 <input type="number" id="race" min="0" step="1" placeholder="例 60"> 分</label>
-      <span class="hint">入れると、積算のグラフに「均等に使い切る線」を引き、差を出します。</span>
+<main class="page">
+  <div class="wrap">
+    <div class="notice" id="notice"></div>
+
+    <div class="layout">
+      <!-- 左: 数字とストリップチャート -->
+      <section class="panel" aria-labelledby="runTitle">
+        <div class="panel-h">
+          <div>
+            <div class="eyebrow" id="runFiles">—</div>
+            <h2 id="runTitle">走行</h2>
+          </div>
+          <div class="scope">
+            <span class="hint" id="scopeLabel">走行全体</span>
+            <button type="button" id="zoomIn" disabled>選んだ範囲を拡大</button>
+            <button type="button" id="clearSel" disabled>選択を解除</button>
+            <button type="button" id="zoomOut" disabled>全体を表示</button>
+          </div>
+        </div>
+        <div class="readout" id="readout"></div>
+        <div class="charts" id="charts"></div>
+        <div class="transport">
+          <button class="play" id="play" type="button" aria-label="再生"><svg viewBox="0 0 16 16" id="playIcon"><path d="M3 1.5v13l11-6.5z"/></svg></button>
+          <select class="speed" id="speed" aria-label="再生の速さ">
+            <option value="10">×10</option><option value="30" selected>×30</option><option value="60">×60</option><option value="120">×120</option>
+          </select>
+          <input class="scrub" id="scrub" type="range" min="0" max="1000" value="1000" step="1" aria-label="再生の位置">
+          <div class="tc" id="tc">00:00 <small>/ 00:00</small></div>
+        </div>
+      </section>
+
+      <!-- 右: 計器盤と走行の一覧 -->
+      <aside class="side">
+        <section class="panel gauge" aria-labelledby="gaugeTitle">
+          <div class="panel-h"><div><div class="eyebrow">カーソルの位置</div><h2 id="gaugeTitle">計器盤</h2></div><span class="tc" id="gaugeTime">00:00</span></div>
+          <div class="gauge-wrap"><svg id="gauge" viewBox="0 0 280 214" role="img" aria-label="電流計"></svg></div>
+          <div class="live" id="live"></div>
+        </section>
+        <section class="panel" aria-labelledby="runsTitle">
+          <div class="panel-h"><div><div class="eyebrow">押すと表示 · 印で比較</div><h2 id="runsTitle">走行の一覧</h2></div></div>
+          <ul class="runs" id="runList"></ul>
+        </section>
+      </aside>
     </div>
-  </div>
 
-  <div id="main" class="hidden">
-    <div class="card">
-      <h2>走行の一覧</h2>
+    <div class="cols">
+      <section class="panel" aria-labelledby="histTitle">
+        <div class="panel-h"><div><div class="eyebrow">その電流で走っていた時間</div><h2 id="histTitle">電流の分布</h2></div><span class="hint" id="histScope"></span></div>
+        <div class="body" id="hist"></div>
+      </section>
+      <section class="panel" aria-labelledby="cmpTitle">
+        <div class="panel-h"><div><div class="eyebrow">走行の始めからの使用量</div><h2 id="cmpTitle">走行の比較</h2></div><span class="legend" id="cmpLegend"></span></div>
+        <div class="body" id="compare"></div>
+      </section>
+    </div>
+
+    <section class="panel" aria-labelledby="tableTitle">
+      <div class="panel-h"><div><div class="eyebrow">読み込んだすべての走行</div><h2 id="tableTitle">走行の数字</h2></div></div>
       <div class="tablewrap">
         <table>
           <thead><tr>
-            <th title="重ねて比べる">比較</th><th>走行</th><th>ファイル</th><th>時間</th><th>使用量 mAh</th><th>Wh</th>
-            <th>平均 A</th><th>最大 A</th><th>最低 V</th><th title="電流の 2 乗平均 ÷ 平均">ばらつき</th><th>OVER</th><th>記録なし</th>
+            <th>比較</th><th>走行</th><th>時間</th><th>使用量 mAh</th><th>Wh</th><th>平均 A</th><th>最大 A</th><th>最低 V</th><th title="電流の 2 乗平均 ÷ 平均">ばらつき</th><th>OVER</th><th>記録なし</th><th>ファイル</th>
           </tr></thead>
           <tbody id="runRows"></tbody>
         </table>
       </div>
-      <p class="hint" style="margin:8px 0 0">行を押すと下のグラフに表示します。「比較」に印を付けた走行は、いちばん下のグラフに重ねます（8 本まで）。</p>
-    </div>
+    </section>
 
-    <div class="card">
-      <div class="row" style="justify-content:space-between; margin-bottom:10px">
-        <h2 style="margin:0" id="activeTitle">走行</h2>
-        <span class="hint" id="scopeLabel"></span>
-      </div>
-      <div class="row rangebar" id="rangebar">
-        <button id="zoomIn">選んだ範囲を拡大</button>
-        <button id="clearSel">選択を解除</button>
-      </div>
-      <div class="tiles" id="tiles"></div>
-    </div>
-
-    <div class="card">
-      <div class="row" style="justify-content:space-between; margin-bottom:6px">
-        <h2 style="margin:0">時間の流れ</h2>
-        <div class="row">
-          <button id="zoomOut" disabled>全体を表示</button>
-        </div>
-      </div>
-      <p class="hint" style="margin:0 0 8px">グラフの上を横にドラッグすると範囲を選べます（その範囲の数字が上に出ます）。ダブルクリックで全体に戻ります。</p>
-      <div id="charts"></div>
-    </div>
-
-    <div class="cols">
-      <div class="card">
-        <div class="chart">
-          <div class="title"><b>電流の分布（A）</b><span class="legend">その電流で走っていた時間</span></div>
-          <div id="hist"></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="chart">
-          <div class="title"><b>走行の比較（使用量）</b><span class="legend" id="cmpLegend"></span></div>
-          <div id="compare"></div>
-        </div>
-      </div>
-    </div>
+    <footer>
+      <ul>
+        <li>使用量 mAh は INA228 の積算（charge_mAh）の差。Nano のリセットで記録が途切れた間も、INA228 は積算を続けている。</li>
+        <li>Wh・平均電力・ばらつきは行の間をつないで計算し、記録のない区間（0.5 秒以上の抜け）は含めない。</li>
+        <li>ばらつき = 電流の 2 乗平均 ÷ 平均電流。1.00 なら一定の電流。電池の中の損失（I²R）は、同じ量を一定の電流で使ったときの「ばらつき²」倍になる。</li>
+        <li>OVER = 電流が 20A（ファームウェアの MAX_CURRENT_A）に張り付いていた時間。その間は実際より少なく数えている。</li>
+      </ul>
+    </footer>
   </div>
-
-  <footer>
-    <ul>
-      <li>使用量 mAh は INA228 の積算（charge_mAh）の差です。Nano のリセットで記録が途切れた間も、INA228 は積算を続けています。</li>
-      <li>Wh・平均電力・ばらつきは、行の間をつないで計算します。記録のない区間（0.5 秒以上の抜け）は含めません。</li>
-      <li>ばらつき = 電流の 2 乗平均 ÷ 平均電流。1.00 なら一定の電流です。電池の中の損失（I²R）は、同じ量を一定の電流で使ったときの「ばらつき²」倍になります。</li>
-      <li>OVER = 電流が 20A（ファームウェアの MAX_CURRENT_A）に張り付いていた時間。その間は実際より少なく数えています。</li>
-    </ul>
-  </footer>
-</div>
+</main>
 <div class="tip" id="tip"></div>
+<div class="drop-veil" aria-hidden="true">ここに CSV を落とす</div>
 
 <script src="logviewer-core.js"></script>
 <script>
 'use strict';
 (function () {
   const C = window.LogCore;
+  const $ = (id) => document.getElementById(id);
   if (!C) {
-    document.getElementById('drop').insertAdjacentHTML('beforeend',
-      '<p class="msg warn">logviewer-core.js が読み込めません。index.html と同じフォルダに置いてください。</p>');
+    $('notice').className = 'notice warn';
+    $('notice').textContent = 'logviewer-core.js が読み込めません。index.html と同じフォルダに置いてください。';
     return;
   }
-  const $ = (id) => document.getElementById(id);
   const SLOTS = 8;
+  const MAX_A = 20;                 // ファームウェアの MAX_CURRENT_A
   const state = {
-    runs: [],          // 読み込んだ走行
-    active: -1,        // グラフに出す走行 (runs の位置)
-    view: null,        // 拡大中の範囲 {t0, t1} (null = 全体)
-    sel: null,         // ドラッグで選んだ範囲 {t0, t1}
-    compare: new Map(), // 比較する走行の key → 色の番号 (0〜7)。色は走行についていく
-    batch: 0,
+    runs: [], active: -1, view: null, sel: null, compare: new Map(), batch: 0, sample: false,
+    cursor: null,                   // 再生・スクラブの位置 [s] (null = 走行の終わり)
+    hover: null,                    // マウスを乗せている位置 [s]
+    playing: false,
   };
 
   // ---------------------------------------------------------------------------
   //  設定 (この端末にだけ覚える)
-  function loadSetting(k) { try { return localStorage.getItem('ene1viewer.' + k); } catch (e) { return null; } }
-  function saveSetting(k, v) { try { localStorage.setItem('ene1viewer.' + k, v); } catch (e) { /* 保存できなくても動く */ } }
+  const loadSetting = (k) => { try { return localStorage.getItem('ene1tele.' + k); } catch (e) { return null; } };
+  const saveSetting = (k, v) => { try { localStorage.setItem('ene1tele.' + k, v); } catch (e) { /* 保存できなくても動く */ } };
   $('budget').value = loadSetting('budget') || '';
   $('race').value = loadSetting('race') || '';
-  function budget() { const b = parseFloat($('budget').value); return b > 0 ? b : 0; }
-  function raceS() { const m = parseFloat($('race').value); return m > 0 ? m * 60 : 0; }
-  for (const id of ['budget', 'race']) {
-    $(id).addEventListener('input', () => { saveSetting(id, $(id).value); renderAll(); });
-  }
+  const budget = () => { const b = parseFloat($('budget').value); return b > 0 ? b : 0; };
+  const raceS = () => { const m = parseFloat($('race').value); return m > 0 ? m * 60 : 0; };
+  for (const id of ['budget', 'race']) $(id).addEventListener('input', () => { saveSetting(id, $(id).value); renderAll(); });
+
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const slotColor = (n) => `var(--s${n + 1})`;
+  const fmt = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '—');
 
   // ---------------------------------------------------------------------------
-  //  ファイルの読み込み
-  function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-  function showMsg(text, warn) {
-    const m = $('msg');
-    m.textContent = text; m.classList.toggle('hidden', !text); m.classList.toggle('warn', !!warn);
-  }
+  //  読み込み
+  function notice(html, warn) { const n = $('notice'); n.className = 'notice' + (warn ? ' warn' : ''); n.innerHTML = html; }
 
   async function loadFiles(fileList, append) {
     const list = [...fileList].filter((f) => /\.csv$/i.test(f.name));
-    if (!list.length) { showMsg('CSV ファイルがありませんでした。', true); return; }
+    if (!list.length) { notice('CSV ファイルがありませんでした。<b>LOG000.CSV</b> などを選んでください。', true); return; }
     const parsed = [];
     for (const f of list) parsed.push(C.parseCsv(await f.text(), f.name));
-    addParsed(parsed, append, null);
+    if (!append || state.sample) { state.sample = false; addParsed(parsed, false, null); } else addParsed(parsed, true, null);
   }
 
   function addParsed(parsed, append, label) {
@@ -295,17 +419,17 @@ footer li { margin: 2px 0; }
     state.batch++;
     for (const r of newRuns) {
       r.key = state.batch + ':' + r.index;
-      r.label = (label || (state.batch > 1 || append ? `読込${state.batch}-` : '')) + '走行 ' + (r.index + 1);
+      r.label = (label || (state.batch > 1 ? `読込${state.batch}-` : '')) + '走行 ' + (r.index + 1);
       r.summary = C.stats(r);
       state.runs.push(r);
     }
-    const notes = [];
-    notes.push(`${parsed.length} ファイルから ${newRuns.length} 走行を読み込みました。`);
-    if (bad.length) notes.push(`見出し行が違うファイル: ${bad.map((f) => f.name).join(', ')}（列の順番を確かめてください）`);
-    if (skipped) notes.push(`読めない行を ${skipped} 行飛ばしました（電源断で途中までの行など）。`);
-    showMsg(notes.join(' '), bad.length > 0 || skipped > 0);
+    const msg = [];
+    if (state.sample) msg.push('<b>サンプル</b>（作りもののデータ）を表示しています。<b>CSV を開く</b>と、あなたのログに置き換わります。');
+    else msg.push(`${parsed.length} ファイルから <b>${newRuns.length} 走行</b>を読み込みました。Nano のリセットで分かれたファイルは 1 つの走行につないでいます。`);
+    if (bad.length) msg.push(`見出し行が違うファイル: ${esc(bad.map((f) => f.name).join(', '))}`);
+    if (skipped) msg.push(`読めない行を ${skipped} 行飛ばしました（電源断で途中までの行など）。`);
+    notice(msg.join(' '), bad.length > 0 || skipped > 0);
     if (!newRuns.length) return;
-    // 新しく読んだ中でいちばん長い走行を表示し、比較にも入れる
     let best = state.runs.length - newRuns.length;
     for (let k = best; k < state.runs.length; k++) if (state.runs[k].summary.duration > state.runs[best].summary.duration) best = k;
     for (let k = state.runs.length - newRuns.length; k < state.runs.length && state.compare.size < SLOTS; k++) {
@@ -315,7 +439,7 @@ footer li { margin: 2px 0; }
   }
 
   $('fileOpen').addEventListener('change', (e) => { loadFiles(e.target.files, false); e.target.value = ''; });
-  $('fileAdd').addEventListener('change', (e) => { loadFiles(e.target.files, state.runs.length > 0); e.target.value = ''; });
+  $('fileAdd').addEventListener('change', (e) => { loadFiles(e.target.files, true); e.target.value = ''; });
   let dragDepth = 0;
   window.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
   window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
@@ -326,31 +450,29 @@ footer li { margin: 2px 0; }
   });
 
   // ---------------------------------------------------------------------------
-  //  サンプル (練習走行 2 回分の作りもの。実際のファームウェアと同じ形の CSV を作って読ませる)
-  $('sample').addEventListener('click', () => {
+  //  サンプル (練習走行 2 回分の作りもの。ファームウェアと同じ形の CSV を作って読ませる)
+  function loadSample() {
+    state.sample = true;
     const files = [];
-    // 走行 1: 20 分。9 分目に Nano がリセットされ (3 秒記録なし)、LOG001 に続く。加速が強く OVER あり
     files.push(...makeSampleRun({ minutes: 20, peak: 21, cruise: 6.5, seed: 3, resetAt: 540, firstLog: 0 }));
-    // 走行 2: 20 分。加速を抑えた走り
     files.push(...makeSampleRun({ minutes: 20, peak: 12, cruise: 6.8, seed: 7, resetAt: 0, firstLog: 2 }));
-    if ((budget() === 0) && (raceS() === 0)) {
-      $('budget').value = 2600; $('race').value = 20;
-    }
+    if (!budget() && !raceS()) { $('budget').value = 2600; $('race').value = 20; }
     addParsed(files.map((f) => C.parseCsv(f.text, f.name)), false, 'サンプル');
-  });
+  }
+  $('sample').addEventListener('click', loadSample);
 
   function makeSampleRun(o) {
     let seed = o.seed;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    const lap = 95;  // 1 周 95 秒
-    const prof = (s) => {         // 周回の中の位置 → 狙いの電流 [A]
+    const lap = 95;
+    const prof = (s) => {
       const x = s % lap;
-      if (x < 5) return o.peak;                        // 立ち上がりの加速
-      if (x < 30) return o.cruise;                     // 直線
-      if (x < 42) return 1.2;                          // コーナー手前で惰性
-      if (x < 48) return o.peak * 0.75;                // 立ち上がり
-      if (x < 70) return o.cruise + 3.5;               // 上り坂
-      if (x < 80) return 0.4;                          // 下り坂
+      if (x < 5) return o.peak;
+      if (x < 30) return o.cruise;
+      if (x < 42) return 1.2;
+      if (x < 48) return o.peak * 0.75;
+      if (x < 70) return o.cruise + 3.5;
+      if (x < 80) return 0.4;
       return o.cruise;
     };
     const files = [];
@@ -362,11 +484,11 @@ footer li { margin: 2px 0; }
     while (t < end) {
       t += dt;
       const target = Math.min(prof(t) + (rnd() - 0.5) * 0.8, 40);
-      cur += (target - cur) * 0.25;                    // モーターコントローラーの立ち上がり
-      const meas = Math.max(-0.5, Math.min(cur, 20));  // 20A で頭打ち (MAX_CURRENT_A)
-      q += cur * dt / 3.6;                             // INA228 は頭打ちの前の値ではなく、測れた値で積算する
+      cur += (target - cur) * 0.25;
+      const meas = Math.max(-0.5, Math.min(cur, MAX_A));
+      q += cur * dt / 3.6;
       const v = 25.4 - 0.0009 * q - 0.085 * cur + (rnd() - 0.5) * 0.01;
-      if (!resetDone && t >= o.resetAt) {              // Nano のリセット: 3 秒記録なし、INA228 は積算を続ける
+      if (!resetDone && t >= o.resetAt) {
         flush();
         const t2 = t + 3;
         while (t < t2) { t += dt; q += cur * dt / 3.6; }
@@ -379,294 +501,296 @@ footer li { margin: 2px 0; }
   }
 
   // ---------------------------------------------------------------------------
-  //  走行の選択と比較
+  //  選択・比較
+  const run = () => state.runs[state.active];
   function selectRun(k) {
-    state.active = k; state.view = null; state.sel = null;
-    $('main').classList.remove('hidden');
+    stop();
+    state.active = k; state.view = null; state.sel = null; state.cursor = null; state.hover = null;
     renderAll();
   }
-
   function toggleCompare(key, on) {
     if (on) {
       if (state.compare.has(key) || state.compare.size >= SLOTS) return;
       const used = new Set(state.compare.values());
       let slot = 0; while (used.has(slot)) slot++;
       state.compare.set(key, slot);
-    } else {
-      state.compare.delete(key);
-    }
+    } else state.compare.delete(key);
+  }
+  function onCompareClick(e) {
+    const cb = e.target.closest('input[data-cmp]');
+    if (cb) { e.stopPropagation(); toggleCompare(cb.dataset.cmp, cb.checked); renderRunList(); renderTable(); renderCompare(); return true; }
+    return false;
+  }
+  $('runList').addEventListener('click', (e) => { if (onCompareClick(e)) return; const li = e.target.closest('[data-k]'); if (li) selectRun(+li.dataset.k); });
+  $('runRows').addEventListener('click', (e) => { if (onCompareClick(e)) return; const tr = e.target.closest('[data-k]'); if (tr) selectRun(+tr.dataset.k); });
+  $('runList').addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('li[data-k]')) { e.preventDefault(); selectRun(+e.target.dataset.k); }
+  });
+
+  function renderRunList() {
+    $('runList').innerHTML = state.runs.map((r, k) => {
+      const cmp = state.compare.has(r.key), full = !cmp && state.compare.size >= SLOTS;
+      const sw = cmp ? `<span class="swatch" style="background:${slotColor(state.compare.get(r.key))}"></span>` : '';
+      return `<li data-k="${k}" tabindex="0" class="${k === state.active ? 'active' : ''}">
+        <input type="checkbox" data-cmp="${esc(r.key)}" ${cmp ? 'checked' : ''} ${full ? 'disabled' : ''} aria-label="${esc(r.label)} を比較に入れる">
+        <span class="nm">${sw}${esc(r.label)} <span class="hint">${C.fmtTime(r.summary.duration)}</span></span>
+        <span class="mah">${r.summary.mAh.toFixed(0)}<small>mAh</small></span>
+        <span class="fl">${esc(r.files.join(' + '))}</span></li>`;
+    }).join('');
   }
 
-  const slotColor = (n) => `var(--s${n + 1})`;
-
-  function renderRuns() {
-    const rows = state.runs.map((r, k) => {
-      const s = r.summary;
-      const cmp = state.compare.has(r.key);
-      const full = !cmp && state.compare.size >= SLOTS;
+  function renderTable() {
+    $('runRows').innerHTML = state.runs.map((r, k) => {
+      const s = r.summary, cmp = state.compare.has(r.key), full = !cmp && state.compare.size >= SLOTS;
       const sw = cmp ? `<span class="swatch" style="background:${slotColor(state.compare.get(r.key))}"></span>` : '';
       return `<tr data-k="${k}" class="${k === state.active ? 'active' : ''}">
         <td><input type="checkbox" data-cmp="${esc(r.key)}" ${cmp ? 'checked' : ''} ${full ? 'disabled' : ''} aria-label="比較に入れる"></td>
-        <td>${sw}${esc(r.label)}</td>
-        <td class="files">${esc(r.files.join(' + '))}</td>
-        <td>${C.fmtTime(s.duration)}</td>
-        <td>${s.mAh.toFixed(0)}</td>
-        <td>${s.Wh.toFixed(2)}</td>
-        <td>${s.avgA.toFixed(2)}</td>
-        <td>${s.peakA.toFixed(1)}</td>
-        <td>${s.minV.toFixed(2)}</td>
-        <td>${isFinite(s.smooth) ? s.smooth.toFixed(2) : '-'}</td>
-        <td>${s.overS > 0 ? s.overS.toFixed(1) + ' 秒' : '-'}</td>
-        <td>${s.gapS > 0 ? s.gapS.toFixed(1) + ' 秒' : '-'}</td>
-      </tr>`;
-    });
-    $('runRows').innerHTML = rows.join('');
+        <td>${sw}${esc(r.label)}</td><td>${C.fmtTime(s.duration)}</td><td>${s.mAh.toFixed(0)}</td><td>${s.Wh.toFixed(2)}</td>
+        <td>${s.avgA.toFixed(2)}</td><td>${s.peakA.toFixed(1)}</td><td>${s.minV.toFixed(2)}</td><td>${fmt(s.smooth, 2)}</td>
+        <td>${s.overS > 0 ? s.overS.toFixed(1) + 's' : '—'}</td><td>${s.gapS > 0 ? s.gapS.toFixed(1) + 's' : '—'}</td>
+        <td style="color:var(--muted)">${esc(r.files.join(' + '))}</td></tr>`;
+    }).join('');
   }
-  $('runRows').addEventListener('click', (e) => {
-    const cb = e.target.closest('input[data-cmp]');
-    if (cb) { toggleCompare(cb.dataset.cmp, cb.checked); renderRuns(); renderCompare(); return; }
-    const tr = e.target.closest('tr[data-k]');
-    if (tr) selectRun(+tr.dataset.k);
-  });
 
   // ---------------------------------------------------------------------------
-  //  数字のまとめ
-  function tile(k, v, unit, d, cls) {
-    return `<div class="tile ${cls || ''}"><div class="k">${k}</div><div class="v">${v}<small>${unit || ''}</small></div>${d ? `<div class="d">${d}</div>` : ''}</div>`;
-  }
-
-  function renderTiles() {
-    const r = state.runs[state.active];
-    const range = state.sel || state.view;
+  //  読み取り帯 (選んだ範囲・拡大中の範囲・走行全体の数字)
+  function scopeRange() {
+    const r = run(), range = state.sel || state.view;
     const i0 = range ? C.lowerBound(r.t, range.t0) : 0;
     const i1 = range ? Math.max(i0, C.lowerBound(r.t, range.t1) - 1) : r.t.length - 1;
+    return { i0, i1, range };
+  }
+  function ro(k, v, unit, d, cls) {
+    return `<div class="ro ${cls || ''}"><div class="k">${k}</div><div class="v">${v}<small>${unit || ''}</small></div>${d ? `<div class="d">${d}</div>` : ''}</div>`;
+  }
+  function renderReadout() {
+    const r = run(), { i0, i1, range } = scopeRange();
     const s = C.stats(r, i0, i1);
-    $('activeTitle').textContent = `${r.label}（${r.files.join(' + ')}）`;
-    $('scopeLabel').textContent = range
-      ? `${state.sel ? '選んだ範囲' : '拡大中の範囲'} ${C.fmtTime(s.t0)}〜${C.fmtTime(s.t1)} の数字`
-      : '走行全体の数字';
-    $('rangebar').classList.toggle('on', !!state.sel);
+    $('runTitle').textContent = r.label;
+    $('runFiles').textContent = r.files.join(' + ');
+    $('scopeLabel').textContent = range ? `${state.sel ? '選んだ範囲' : '拡大中'} ${C.fmtTime(s.t0)}–${C.fmtTime(s.t1)}` : '走行全体';
+    $('zoomIn').disabled = !state.sel; $('clearSel').disabled = !state.sel; $('zoomOut').disabled = !state.view;
     const out = [];
-    out.push(tile('使用量', s.mAh.toFixed(0), 'mAh', `${C.fmtTime(s.duration)} の間`));
-    out.push(tile('平均電流', s.avgA.toFixed(2), 'A', `平均電力 ${s.avgW.toFixed(0)} W`));
-    out.push(tile('最大電流', s.peakA.toFixed(1), 'A', `${C.fmtTime(s.peakAt)} の時点`));
-    out.push(tile('最低電圧', s.minV.toFixed(2), 'V', `${C.fmtTime(s.minVAt)} の時点 ・ 最高 ${s.maxV.toFixed(2)} V`));
-    out.push(tile('電力量', s.Wh.toFixed(2), 'Wh', s.gapS > 0 ? `記録なし ${s.gapS.toFixed(1)} 秒は含まない` : ''));
-    out.push(tile('ばらつき', isFinite(s.smooth) ? s.smooth.toFixed(2) : '-', '',
-      isFinite(s.smooth) ? `電池の損失は一定電流の ${(s.smooth * s.smooth).toFixed(2)} 倍` : ''));
-    if (s.overS > 0) out.push(tile('OVER（20A で頭打ち）', s.overS.toFixed(1), '秒', 'この間は少なく数えている', 'over'));
-    if (s.joins > 0) {
-      out.push(tile('Nano のリセット', s.joins, '回', `記録なし ${s.gapS.toFixed(1)} 秒（mAh は INA228 が数え続けている）`));
-    } else if (s.gaps.length > 0) {
-      out.push(tile('記録なし', s.gapS.toFixed(1), '秒', `${s.gaps.length} か所`));
-    }
-    // ペース配分 (走行の始めからの経過で比べる)
+    out.push(ro('使用量', s.mAh.toFixed(0), 'mAh', `${C.fmtTime(s.duration)} の間`, 'hero'));
     const B = budget(), R = raceS();
     if (B && R && !range) {
       const p = C.pace(r, B, R);
       const over = p.diff > 0;
-      out.push(tile('予算との差', `${over ? '▲ +' : '▼ '}${p.diff.toFixed(0)}`, 'mAh',
-        `<span class="${over ? 'bad' : 'good'}">${over ? '使いすぎ' : '余裕あり'}</span> ・ 理想 ${p.ideal.toFixed(0)} mAh`));
-      if (!p.finished) {
-        out.push(tile('残りに使える電流', isFinite(p.needA) && p.needA > 0 ? p.needA.toFixed(2) : '0', 'A',
-          `残り ${C.fmtTime(p.remainS)} で ${Math.max(0, p.remainMah).toFixed(0)} mAh`));
-      } else {
-        out.push(tile('使い残し', Math.max(0, p.remainMah).toFixed(0), 'mAh', `予算 ${B} mAh のうち`));
-      }
+      out.push(ro('予算との差', `${over ? '+' : '−'}${Math.abs(p.diff).toFixed(0)}`, 'mAh',
+        `<span class="chip ${over ? 'over' : 'under'}">${over ? '▲ 使いすぎ' : '▼ 余裕あり'}</span> 理想 ${p.ideal.toFixed(0)}`, 'hero'));
     }
-    $('tiles').innerHTML = out.join('');
+    out.push(ro('平均電流', s.avgA.toFixed(2), 'A', `平均電力 ${s.avgW.toFixed(0)} W`));
+    out.push(ro('最大電流', s.peakA.toFixed(1), 'A', `${C.fmtTime(s.peakAt)} の時点`));
+    out.push(ro('最低電圧', s.minV.toFixed(2), 'V', `最高 ${s.maxV.toFixed(2)} V`));
+    out.push(ro('電力量', s.Wh.toFixed(2), 'Wh', s.gapS > 0 ? `記録なし ${s.gapS.toFixed(1)} 秒は含まない` : '50ms ごとの記録から'));
+    out.push(ro('ばらつき', fmt(s.smooth, 2), '', Number.isFinite(s.smooth) ? `損失は一定電流の ${(s.smooth * s.smooth).toFixed(2)} 倍` : ''));
+    const chips = [];
+    if (s.overS > 0) chips.push(`<span class="chip warn">OVER ${s.overS.toFixed(1)} 秒（20A で頭打ち）</span>`);
+    if (s.joins > 0) chips.push(`<span class="chip">Nano リセット ${s.joins} 回</span>`);
+    if (s.gaps.length) chips.push(`<span class="chip">記録なし ${s.gapS.toFixed(1)} 秒</span>`);
+    if (!chips.length) chips.push('<span class="chip">異常なし</span>');
+    out.push(`<div class="ro status"><div class="k">記録の状態</div>${chips.join('')}</div>`);
+    $('readout').innerHTML = out.join('');
   }
-
-  $('clearSel').addEventListener('click', () => { state.sel = null; renderTiles(); renderCharts(); renderHist(); });
-  $('zoomIn').addEventListener('click', () => { if (state.sel) { state.view = state.sel; state.sel = null; renderAll(); } });
-  $('zoomOut').addEventListener('click', () => { state.view = null; state.sel = null; renderAll(); });
+  $('clearSel').addEventListener('click', () => { state.sel = null; renderScoped(); });
+  $('zoomIn').addEventListener('click', () => { if (state.sel) { state.view = state.sel; state.sel = null; renderScoped(); } });
+  $('zoomOut').addEventListener('click', () => { state.view = null; state.sel = null; renderScoped(); });
 
   // ---------------------------------------------------------------------------
-  //  時間のグラフ (電流・電圧・電力・積算の 4 段。横軸は共通)
-  const M = { l: 50, r: 14, t: 14, b: 24 };
-  const CH = 150;
-  const charts = [
-    { key: 'i', title: '電流', unit: 'A', digits: 2, zero: true },
-    { key: 'v', title: '電圧', unit: 'V', digits: 3, zero: false },
-    { key: 'p', title: '電力', unit: 'W', digits: 0, zero: true },
-    { key: 'q', title: '積算', unit: 'mAh', digits: 1, zero: true },
+  //  ストリップチャート (横軸は共通)
+  const M = { l: 50, r: 12, t: 10, b: 8 };
+  const STRIPS = [
+    { key: 'i', title: '電流', unit: 'A', digits: 2, zero: true, color: 'var(--trace-i)', h: 128 },
+    { key: 'v', title: '電圧', unit: 'V', digits: 3, zero: false, color: 'var(--trace-v)', h: 104 },
+    { key: 'p', title: '電力', unit: 'W', digits: 0, zero: true, color: 'var(--trace-p)', h: 104 },
+    { key: 'q', title: '積算', unit: 'mAh', digits: 1, zero: true, color: 'var(--trace-q)', h: 120 },
+    { key: 'pace', title: '予算との差', unit: 'mAh', digits: 0, zero: true, color: 'var(--ink-2)', h: 110 },
   ];
-  let geo = null;  // 描画した座標の情報 (ホバーで使う)
+  let geo = null;
+
+  function paceSeries(r) {
+    const B = budget(), R = raceS();
+    if (!(B && R)) return null;
+    if (r._pace && r._paceKey === B + '/' + R) return r._pace;
+    const d = new Float64Array(r.t.length);
+    for (let k = 0; k < r.t.length; k++) d[k] = (r.q[k] - r.q[0]) - B * Math.min(r.t[k] - r.t[0], R) / R;
+    r._pace = d; r._paceKey = B + '/' + R;
+    return d;
+  }
 
   function renderCharts() {
-    const r = state.runs[state.active];
-    const host = $('charts');
-    const W = Math.max(280, host.clientWidth || 600);
-    const pw = W - M.l - M.r, ph = CH - M.t - M.b;
+    const r = run(), host = $('charts');
+    const W = Math.max(280, host.clientWidth - 28 || 600);
+    const pw = W - M.l - M.r;
     const tA = state.view ? state.view.t0 : r.t[0];
     const tB = state.view ? state.view.t1 : r.t[r.t.length - 1];
-    const i0 = Math.max(0, C.lowerBound(r.t, tA) - 1);
-    const i1 = Math.min(r.t.length - 1, C.lowerBound(r.t, tB));
+    const i0 = Math.max(0, C.lowerBound(r.t, tA) - 1), i1 = Math.min(r.t.length - 1, C.lowerBound(r.t, tB));
     const X = (t) => M.l + (t - tA) / ((tB - tA) || 1) * pw;
     const xt = C.niceTicks(tA, tB, Math.max(3, Math.floor(pw / 90)));
     const s = C.stats(r, i0, i1);
-    const B = budget(), R = raceS();
-    const paceOn = B > 0 && R > 0;
+    const B = budget(), R = raceS(), pace = paceSeries(r);
     const buckets = Math.max(50, Math.floor(pw));
-    $('zoomOut').disabled = !state.view;
-
-    // OVER の区間 (1px 未満の切れ目はまとめる)
     const overs = [];
     for (let k = i0; k <= i1; k++) {
       if (r.i[k] < C.DEFAULT_OVER_A) continue;
-      const a = r.t[k], b = k < r.t.length - 1 ? r.t[k + 1] : a;
-      const last = overs[overs.length - 1];
+      const a = r.t[k], b = k < r.t.length - 1 ? r.t[k + 1] : a, last = overs[overs.length - 1];
       if (last && X(a) - X(last.t1) < 1) last.t1 = b; else overs.push({ t0: a, t1: b });
     }
-
+    geo = { strips: [], X, tA, tB, pw, W, r };
+    const strips = STRIPS.filter((c) => c.key !== 'pace' || pace);
     let html = '';
-    geo = { charts: [], X, tA, tB, pw, M, run: r };
-    charts.forEach((c, n) => {
-      const y = r[c.key];
+    strips.forEach((c, n) => {
+      const last = n === strips.length - 1;
+      const H = c.h + (last ? 18 : 0), ph = c.h - M.t - M.b;
+      const y = c.key === 'pace' ? pace : r[c.key];
       let lo = Infinity, hi = -Infinity;
       for (let k = i0; k <= i1; k++) { if (y[k] < lo) lo = y[k]; if (y[k] > hi) hi = y[k]; }
-      let paceEnd = 0;
-      if (c.key === 'q' && paceOn) {
-        paceEnd = r.q[0] + B * Math.min(tB - r.t[0], R) / R;
-        hi = Math.max(hi, paceEnd);
+      if (c.key === 'q' && pace) {
+        hi = Math.max(hi, r.q[0] + B * Math.min(tB - r.t[0], R) / R);
         lo = Math.min(lo, r.q[0] + B * Math.max(0, Math.min(tA - r.t[0], R)) / R);
       }
+      if (c.key === 'pace') { const m = Math.max(Math.abs(lo), Math.abs(hi), 1); lo = -m; hi = m; }
       if (c.zero) lo = Math.min(lo, 0);
-      if (!(hi > lo)) { hi = lo + 1; }
-      const padY = c.zero ? 0 : (hi - lo) * 0.08;
-      const yt = C.niceTicks(lo - padY, hi + padY, 4);
+      if (!(hi > lo)) hi = lo + 1;
+      const padY = c.zero && c.key !== 'pace' ? 0 : (hi - lo) * 0.06;
+      const yt = C.niceTicks(lo - padY, hi + padY, 3);
       const yLo = Math.min(yt.ticks[0], lo - padY), yHi = Math.max(yt.ticks[yt.ticks.length - 1], hi + padY);
       const Y = (v) => M.t + (1 - (v - yLo) / ((yHi - yLo) || 1)) * ph;
-      geo.charts.push({ c, Y, y });
-
+      geo.strips.push({ c, Y, y });
       let g = '';
-      // 背景: 記録なし・OVER・選択範囲
       for (const gp of s.gaps) g += `<rect class="gap" x="${X(gp.t0).toFixed(1)}" y="${M.t}" width="${Math.max(1, X(gp.t1) - X(gp.t0)).toFixed(1)}" height="${ph}"/>`;
-      if (c.key === 'i') for (const o of overs) g += `<rect class="over" x="${X(o.t0).toFixed(1)}" y="${M.t - 8}" width="${Math.max(2, X(o.t1) - X(o.t0)).toFixed(1)}" height="5" rx="1"/>`;
       if (state.sel) g += `<rect class="sel" x="${X(state.sel.t0).toFixed(1)}" y="${M.t}" width="${Math.max(1, X(state.sel.t1) - X(state.sel.t0)).toFixed(1)}" height="${ph}"/>`;
-      // 目盛り
       for (const v of yt.ticks) {
         const yy = Y(v).toFixed(1);
-        g += `<line class="${v === 0 ? 'base' : 'grid'}" x1="${M.l}" x2="${M.l + pw}" y1="${yy}" y2="${yy}"/>`;
+        g += `<line class="${v === 0 ? 'zero' : 'grid'}" x1="${M.l}" x2="${M.l + pw}" y1="${yy}" y2="${yy}"/>`;
         g += `<text x="${M.l - 6}" y="${yy}" dy="0.32em" text-anchor="end">${fmtTick(v, yt.step)}</text>`;
       }
       for (const t of xt.ticks) {
-        g += `<text x="${X(t).toFixed(1)}" y="${M.t + ph + 16}" text-anchor="middle">${C.fmtTime(t)}</text>`;
+        g += `<line class="grid" x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${M.t}" y2="${M.t + ph}"/>`;
+        if (last) g += `<text x="${X(t).toFixed(1)}" y="${M.t + ph + 16}" text-anchor="middle">${C.fmtTime(t)}</text>`;
       }
       g += `<line class="base" x1="${M.l}" x2="${M.l + pw}" y1="${M.t + ph}" y2="${M.t + ph}"/>`;
-      // Nano のリセットの位置
       for (const j of r.joins) {
         if (j.t < tA || j.t > tB) continue;
         const xx = X(j.t).toFixed(1);
         g += `<line class="join" x1="${xx}" x2="${xx}" y1="${M.t}" y2="${M.t + ph}"/>`;
-        if (n === 0) g += `<text class="lbl" x="${+xx + 4}" y="${M.t + 18}">Nano リセット</text>`;
+        if (n === 0) g += `<text class="lbl" x="${+xx + 4}" y="${M.t + 12}">Nano リセット</text>`;
       }
-      // 予算ペースの線
-      if (c.key === 'q' && paceOn) {
-        const pts = [];
-        const tEnd = Math.min(tB, r.t[0] + R);
-        const t0 = Math.max(tA, r.t[0]);
-        pts.push([X(t0), Y(r.q[0] + B * (t0 - r.t[0]) / R)]);
-        pts.push([X(tEnd), Y(r.q[0] + B * (tEnd - r.t[0]) / R)]);
-        if (tB > tEnd) pts.push([X(tB), Y(r.q[0] + B)]);
-        g += `<polyline class="ref" points="${pts.map((p) => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')}"/>`;
-        // 直接ラベル: 横 70% の位置で、上にある線の上・下にある線の下に置く (凡例や線と重ねない)
-        const tl = tA + (tB - tA) * 0.7;
-        const kl = Math.min(r.t.length - 1, C.lowerBound(r.t, tl));
-        const yPace = Y(r.q[0] + B * Math.min(Math.max(0, tl - r.t[0]), R) / R), yReal = Y(r.q[kl]);
-        const paceUp = yPace <= yReal;
-        g += `<text class="lbl" x="${X(tl).toFixed(1)}" y="${(paceUp ? yPace - 7 : yPace + 15).toFixed(1)}" text-anchor="middle">予算ペース</text>`;
-        g += `<text class="lbl" x="${X(tl).toFixed(1)}" y="${(paceUp ? yReal + 15 : yReal - 7).toFixed(1)}" text-anchor="middle">実際</text>`;
-      }
-      // データの線
+      if (c.key === 'i') for (const o of overs) g += `<rect class="over" x="${X(o.t0).toFixed(1)}" y="${M.t - 7}" width="${Math.max(2, X(o.t1) - X(o.t0)).toFixed(1)}" height="4" rx="1"/>`;
       const d = C.decimate(r.t, y, i0, i1, buckets);
       let path = '';
-      for (let k = 0; k < d.length; k++) {
-        path += (k === 0 || d[k].gap ? 'M' : 'L') + X(d[k].t).toFixed(1) + ',' + Y(d[k].y).toFixed(1);
+      for (let k = 0; k < d.length; k++) path += (k === 0 || d[k].gap ? 'M' : 'L') + X(d[k].t).toFixed(1) + ',' + Y(d[k].y).toFixed(1);
+      if (c.key === 'pace') {
+        // 0 より上 (使いすぎ) と下 (余裕) で塗り分ける
+        const y0 = Y(0).toFixed(1), x0 = X(d[0].t).toFixed(1), x1 = X(d[d.length - 1].t).toFixed(1);
+        const area = path.replace(/^M/, `M${x0},${y0}L`).replace(/M/g, 'L').replace(/^L/, 'M') + `L${x1},${y0}Z`;
+        g += `<clipPath id="cpU"><rect x="${M.l}" y="${M.t}" width="${pw}" height="${(Y(0) - M.t).toFixed(1)}"/></clipPath>`;
+        g += `<clipPath id="cpD"><rect x="${M.l}" y="${y0}" width="${pw}" height="${(M.t + ph - Y(0)).toFixed(1)}"/></clipPath>`;
+        g += `<path d="${area}" clip-path="url(#cpU)" style="fill:var(--over);opacity:.22"/>`;
+        g += `<path d="${area}" clip-path="url(#cpD)" style="fill:var(--under);opacity:.22"/>`;
+        g += `<path class="line" d="${path}" clip-path="url(#cpU)" style="stroke:var(--over)"/>`;
+        g += `<path class="line" d="${path}" clip-path="url(#cpD)" style="stroke:var(--under)"/>`;
+        g += `<text class="lbl" x="${M.l + 6}" y="${M.t + 12}">▲ 使いすぎ</text><text class="lbl" x="${M.l + 6}" y="${M.t + ph - 5}">▼ 余裕あり</text>`;
+      } else {
+        g += `<path class="line" d="${path}" style="stroke:${c.color}"/>`;
       }
-      g += `<path class="line" d="${path}" style="stroke:var(--s1)"/>`;
-      // ホバー用
-      g += `<line class="xh" x1="0" x2="0" y1="${M.t}" y2="${M.t + ph}"/>`;
-      g += `<circle class="dot" r="4" style="fill:var(--s1)"/>`;
-      g += `<rect class="hit" data-n="${n}" x="${M.l}" y="${M.t}" width="${pw}" height="${ph}"/>`;
-
+      if (c.key === 'q' && pace) {
+        const tEnd = Math.min(tB, r.t[0] + R), t0 = Math.max(tA, r.t[0]);
+        const pts = [[X(t0), Y(r.q[0] + B * (t0 - r.t[0]) / R)], [X(tEnd), Y(r.q[0] + B * (tEnd - r.t[0]) / R)]];
+        if (tB > tEnd) pts.push([X(tB), Y(r.q[0] + B)]);
+        g += `<polyline class="ref" points="${pts.map((p) => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')}"/>`;
+        const tl = tA + (tB - tA) * 0.72, kl = Math.min(r.t.length - 1, C.lowerBound(r.t, tl));
+        const yP = Y(r.q[0] + B * Math.min(Math.max(0, tl - r.t[0]), R) / R), yR = Y(r.q[kl]), up = yP <= yR;
+        g += `<text class="lbl" x="${X(tl).toFixed(1)}" y="${(up ? yP - 7 : yP + 14).toFixed(1)}" text-anchor="middle">予算ペース</text>`;
+        g += `<text class="lbl" x="${X(tl).toFixed(1)}" y="${(up ? yR + 14 : yR - 7).toFixed(1)}" text-anchor="middle">実際</text>`;
+      }
+      g += `<line class="cur" x1="0" x2="0" y1="${M.t}" y2="${M.t + ph}"/>`;
+      g += `<line class="hov" x1="0" x2="0" y1="${M.t}" y2="${M.t + ph}"/>`;
+      g += `<circle class="dot" r="4" style="fill:${c.key === 'pace' ? 'var(--ink-2)' : c.color}"/>`;
+      g += `<rect class="hit" x="${M.l}" y="${M.t}" width="${pw}" height="${ph}"/>`;
       const legend = [];
-      if (c.key === 'q' && paceOn) legend.push('<span><i style="background:var(--s1)"></i>実際</span>', '<span><i style="background:var(--ink-2)"></i>予算ペース</span>');
       if (c.key === 'i' && overs.length) legend.push('<span><i class="box" style="background:var(--warning)"></i>OVER（20A で頭打ち）</span>');
-      if (n === 0 && s.gaps.length) legend.push('<span><i class="box" style="background:var(--gap-fill)"></i>記録なし</span>');
-      html += `<div class="chart"><div class="title"><b>${c.title}（${c.unit}）</b><span class="legend">${legend.join('')}</span></div>
-        <svg viewBox="0 0 ${W} ${CH}" height="${CH}" role="img" aria-label="${c.title}の時間変化">${g}</svg></div>`;
+      if (c.key === 'i' && s.gaps.length) legend.push('<span><i class="box" style="background:var(--gap-fill)"></i>記録なし</span>');
+      if (c.key === 'q' && pace) legend.push(`<span><i style="background:${c.color}"></i>実際</span><span><i style="background:var(--ink-2)"></i>予算ペース</span>`);
+      if (c.key === 'pace') legend.push(`<span>予算 ${B} mAh を ${R / 60} 分で均等に使う線との差</span>`);
+      html += `<div class="strip"><div class="strip-h"><b><i style="background:${c.key === 'pace' ? 'var(--ink-2)' : c.color}"></i>${c.title} <span>${c.unit}</span></b><span class="legend">${legend.join('')}</span></div>
+        <svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${c.title}の時間変化">${g}</svg></div>`;
     });
     host.innerHTML = html;
-    bindHover();
+    bindCharts();
+    updateCursor();
+  }
+  function fmtTick(v, step) { const dp = step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 3; return v.toFixed(dp); }
+
+  // カーソル: 再生・スクラブの位置 (実線) と、マウスの位置 (薄い線)
+  function idxAt(t) {
+    const r = run();
+    let k = C.lowerBound(r.t, t);
+    if (k > 0 && (k >= r.t.length || t - r.t[k - 1] < r.t[k] - t)) k--;
+    return Math.min(r.t.length - 1, Math.max(0, k));
+  }
+  const cursorT = () => (state.cursor === null ? run().t[run().t.length - 1] : state.cursor);
+  function updateCursor() {
+    if (!geo) return;
+    const r = run(), svgs = [...$('charts').querySelectorAll('svg')];
+    const tc = cursorT(), kc = idxAt(tc);
+    const inView = (t) => t >= geo.tA && t <= geo.tB;
+    svgs.forEach((svg, n) => {
+      const st = geo.strips[n], cur = svg.querySelector('.cur'), dot = svg.querySelector('.dot'), hov = svg.querySelector('.hov');
+      const x = geo.X(r.t[kc]);
+      cur.setAttribute('x1', x); cur.setAttribute('x2', x); cur.style.visibility = inView(r.t[kc]) ? 'visible' : 'hidden';
+      dot.setAttribute('cx', x); dot.setAttribute('cy', st.Y(st.y[kc])); dot.style.visibility = inView(r.t[kc]) ? 'visible' : 'hidden';
+      if (state.hover !== null) { const xh = geo.X(r.t[idxAt(state.hover)]); hov.setAttribute('x1', xh); hov.setAttribute('x2', xh); hov.style.visibility = 'visible'; }
+      else hov.style.visibility = 'hidden';
+    });
+    const span = r.t[r.t.length - 1] - r.t[0] || 1;
+    $('scrub').value = Math.round((r.t[kc] - r.t[0]) / span * 1000);
+    $('tc').innerHTML = `${C.fmtTime(r.t[kc] - r.t[0])} <small>/ ${C.fmtTime(span)}</small>`;
+    renderLive(state.hover !== null ? idxAt(state.hover) : kc);
   }
 
-  function fmtTick(v, step) {
-    const dp = step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 3;
-    return v.toFixed(dp);
-  }
-
-  // ホバー: 4 つのグラフに同じ時刻の縦線を出し、値をまとめて表示する。ドラッグで範囲を選ぶ
-  function bindHover() {
-    const svgs = [...$('charts').querySelectorAll('svg')];
-    const tip = $('tip');
+  function bindCharts() {
+    const svgs = [...$('charts').querySelectorAll('svg')], tip = $('tip');
     let drag = null;
     const tAt = (svg, clientX) => {
       const b = svg.getBoundingClientRect();
-      const x = (clientX - b.left) * (svg.viewBox.baseVal.width / b.width);
-      const t = geo.tA + (x - geo.M.l) / geo.pw * (geo.tB - geo.tA);
-      return Math.max(geo.tA, Math.min(geo.tB, t));
+      const x = (clientX - b.left) * (geo.W / b.width);
+      return Math.max(geo.tA, Math.min(geo.tB, geo.tA + (x - M.l) / geo.pw * (geo.tB - geo.tA)));
     };
-    const hide = () => {
-      tip.style.display = 'none';
-      for (const svg of svgs) for (const el of svg.querySelectorAll('.xh,.dot')) el.style.visibility = 'hidden';
-    };
-    const show = (t, cx, cy) => {
-      const r = geo.run;
-      let k = C.lowerBound(r.t, t);
-      if (k > 0 && (k >= r.t.length || t - r.t[k - 1] < r.t[k] - t)) k--;
-      const xx = geo.X(r.t[k]);
-      svgs.forEach((svg, n) => {
-        const ch = geo.charts[n];
-        const xh = svg.querySelector('.xh'), dot = svg.querySelector('.dot');
-        xh.setAttribute('x1', xx); xh.setAttribute('x2', xx); xh.style.visibility = 'visible';
-        dot.setAttribute('cx', xx); dot.setAttribute('cy', ch.Y(ch.y[k])); dot.style.visibility = 'visible';
-      });
-      const rows = charts.map((c) => `<tr><td>${c.title}</td><td>${r[c.key][k].toFixed(c.digits)} ${c.unit}</td></tr>`);
-      const B = budget(), R = raceS();
-      if (B && R) {
-        const p = C.pace(r, B, R, k);
-        rows.push(`<tr><td>予算との差</td><td>${p.diff > 0 ? '+' : ''}${p.diff.toFixed(0)} mAh</td></tr>`);
-      }
-      if (r.i[k] >= C.DEFAULT_OVER_A) rows.push('<tr><td>⚠</td><td>OVER（20A で頭打ち）</td></tr>');
-      tip.innerHTML = `<div class="t">${C.fmtTime(r.t[k] - 0)}（${r.t[k].toFixed(2)} 秒）</div><table>${rows.join('')}</table>`;
+    const showTip = (k, cx, cy) => {
+      const r = run(), pace = paceSeries(r);
+      const rows = [['電流', `${r.i[k].toFixed(2)} A`], ['電圧', `${r.v[k].toFixed(3)} V`], ['電力', `${r.p[k].toFixed(0)} W`], ['積算', `${r.q[k].toFixed(1)} mAh`]];
+      if (pace) rows.push(['予算との差', `${pace[k] > 0 ? '+' : ''}${pace[k].toFixed(0)} mAh`]);
+      if (r.i[k] >= C.DEFAULT_OVER_A) rows.push(['⚠', 'OVER（20A で頭打ち）']);
+      tip.innerHTML = `<div class="t">${C.fmtTime(r.t[k] - r.t[0])} · t=${r.t[k].toFixed(2)}s</div><table>${rows.map((x) => `<tr><td>${x[0]}</td><td>${x[1]}</td></tr>`).join('')}</table>`;
       tip.style.display = 'block';
-      const tw = tip.offsetWidth, th = tip.offsetHeight;
-      let left = cx + 14; if (left + tw > window.innerWidth - 8) left = cx - tw - 14;
-      let top = cy - th / 2; top = Math.max(8, Math.min(window.innerHeight - th - 8, top));
-      tip.style.left = Math.max(8, left) + 'px'; tip.style.top = top + 'px';
+      let left = cx + 16; if (left + tip.offsetWidth > window.innerWidth - 8) left = cx - tip.offsetWidth - 16;
+      tip.style.left = Math.max(8, left) + 'px';
+      tip.style.top = Math.max(8, Math.min(window.innerHeight - tip.offsetHeight - 8, cy - tip.offsetHeight / 2)) + 'px';
     };
     for (const svg of svgs) {
       const hit = svg.querySelector('.hit');
       hit.addEventListener('pointermove', (e) => {
         const t = tAt(svg, e.clientX);
+        state.hover = t;
         if (drag) {
           drag.t1 = t;
-          const a = Math.min(drag.t0, drag.t1), b = Math.max(drag.t0, drag.t1);
+          const a = Math.min(drag.t0, t), b = Math.max(drag.t0, t);
           for (const s2 of svgs) {
             let rect = s2.querySelector('.sel.live');
             if (!rect) {
               rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-              rect.setAttribute('class', 'sel live'); rect.setAttribute('y', geo.M.t);
-              rect.setAttribute('height', CH - geo.M.t - geo.M.b);
+              rect.setAttribute('class', 'sel live'); rect.setAttribute('y', M.t);
+              rect.setAttribute('height', s2.querySelector('.hit').getAttribute('height'));
               s2.insertBefore(rect, s2.firstChild);
             }
             rect.setAttribute('x', geo.X(a)); rect.setAttribute('width', Math.max(1, geo.X(b) - geo.X(a)));
           }
         }
-        show(t, e.clientX, e.clientY);
+        updateCursor();
+        showTip(idxAt(t), e.clientX, e.clientY);
       });
-      hit.addEventListener('pointerleave', () => { if (!drag) hide(); });
+      hit.addEventListener('pointerleave', () => { if (!drag) { state.hover = null; tip.style.display = 'none'; updateCursor(); } });
       hit.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         drag = { t0: tAt(svg, e.clientX), t1: tAt(svg, e.clientX), x0: e.clientX };
@@ -677,104 +801,163 @@ footer li { margin: 2px 0; }
         const d = drag; drag = null;
         if (Math.abs(e.clientX - d.x0) > 6) {
           state.sel = { t0: Math.min(d.t0, d.t1), t1: Math.max(d.t0, d.t1) };
-          renderTiles(); renderCharts(); renderHist();
+          renderScoped();
         } else {
+          // クリック: その位置に再生カーソルを置く
           for (const s2 of svgs) { const r2 = s2.querySelector('.sel.live'); if (r2) r2.remove(); }
+          state.cursor = d.t0; updateCursor();
         }
       });
-      hit.addEventListener('dblclick', () => { state.view = null; state.sel = null; renderAll(); });
+      hit.addEventListener('dblclick', () => { state.view = null; state.sel = null; renderScoped(); });
     }
   }
 
   // ---------------------------------------------------------------------------
-  //  電流の分布 (棒グラフ。横 = 電流 1A ごと、縦 = その電流だった時間)
-  function renderHist() {
-    const r = state.runs[state.active];
-    const range = state.sel || state.view;
-    const i0 = range ? C.lowerBound(r.t, range.t0) : 0;
-    const i1 = range ? Math.max(i0, C.lowerBound(r.t, range.t1) - 1) : r.t.length - 1;
-    const h = C.histogram(r, i0, i1, 1).filter((b) => b.a1 > -1);
-    const host = $('hist');
-    const W = Math.max(260, host.clientWidth || 400), H = 190;
-    const pw = W - M.l - M.r, ph = H - M.t - M.b;
-    if (!h.length) { host.innerHTML = '<p class="hint">データがありません</p>'; return; }
-    const total = h.reduce((s, b) => s + b.s, 0);
-    const maxS = Math.max(...h.map((b) => b.s));
-    const yt = C.niceTicks(0, maxS / total * 100, 4);
-    const yHi = Math.max(yt.ticks[yt.ticks.length - 1], maxS / total * 100);
-    const aLo = h[0].a0, aHi = h[h.length - 1].a1;
-    const bw = pw / (aHi - aLo);
-    const X = (a) => M.l + (a - aLo) * bw;
-    const Y = (pct) => M.t + (1 - pct / yHi) * ph;
-    let g = '';
-    for (const v of yt.ticks) {
-      g += `<line class="${v === 0 ? 'base' : 'grid'}" x1="${M.l}" x2="${M.l + pw}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/>`;
-      g += `<text x="${M.l - 6}" y="${Y(v).toFixed(1)}" dy="0.32em" text-anchor="end">${v}%</text>`;
+  //  再生
+  function stop() { state.playing = false; setPlayIcon(); }
+  function setPlayIcon() {
+    $('playIcon').innerHTML = state.playing ? '<path d="M3 1.5h3.5v13H3zM9.5 1.5H13v13H9.5z"/>' : '<path d="M3 1.5v13l11-6.5z"/>';
+    $('play').setAttribute('aria-label', state.playing ? '一時停止' : '再生');
+  }
+  let lastFrame = 0;
+  function frame(ts) {
+    if (!state.playing) return;
+    const r = run();
+    const dt = lastFrame ? (ts - lastFrame) / 1000 : 0;
+    lastFrame = ts;
+    const tEnd = state.view ? state.view.t1 : r.t[r.t.length - 1];
+    let t = cursorT() + dt * Number($('speed').value);
+    if (t >= tEnd) { t = tEnd; state.cursor = t; stop(); updateCursor(); return; }
+    state.cursor = t;
+    updateCursor();
+    requestAnimationFrame(frame);
+  }
+  $('play').addEventListener('click', () => {
+    if (state.playing) { stop(); return; }
+    const r = run(), tStart = state.view ? state.view.t0 : r.t[0], tEnd = state.view ? state.view.t1 : r.t[r.t.length - 1];
+    if (cursorT() >= tEnd - 0.01 || cursorT() < tStart) state.cursor = tStart;
+    state.playing = true; lastFrame = 0; setPlayIcon();
+    requestAnimationFrame(frame);
+  });
+  $('scrub').addEventListener('input', () => {
+    const r = run(), span = r.t[r.t.length - 1] - r.t[0];
+    state.cursor = r.t[0] + span * $('scrub').value / 1000;
+    updateCursor();
+  });
+
+  // ---------------------------------------------------------------------------
+  //  計器盤 (カーソルの位置の値)
+  const G = { cx: 140, cy: 128, r: 104, a0: Math.PI * 1.08, a1: Math.PI * -0.08 };
+  const gAngle = (a) => G.a0 + (G.a1 - G.a0) * Math.max(0, Math.min(1, a / MAX_A));
+  const gPt = (ang, rr) => [G.cx + rr * Math.cos(ang), G.cy - rr * Math.sin(ang)];
+  function arc(aFrom, aTo, rr) {
+    const p0 = gPt(gAngle(aFrom), rr), p1 = gPt(gAngle(aTo), rr);
+    const large = Math.abs(gAngle(aTo) - gAngle(aFrom)) > Math.PI ? 1 : 0;
+    return `M${p0[0].toFixed(1)},${p0[1].toFixed(1)}A${rr},${rr} 0 ${large} 1 ${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
+  }
+  function drawGaugeFrame() {
+    let g = `<path class="track" d="${arc(0, MAX_A, G.r)}"/><path class="overzone" d="${arc(18, MAX_A, G.r)}"/><path class="fill" id="gFill" d=""/>`;
+    for (let a = 0; a <= MAX_A; a += 1) {
+      const major = a % 5 === 0, ang = gAngle(a), p0 = gPt(ang, G.r - 10), p1 = gPt(ang, G.r - (major ? 22 : 16));
+      g += `<line class="tick ${major ? 'major' : ''}" x1="${p0[0].toFixed(1)}" y1="${p0[1].toFixed(1)}" x2="${p1[0].toFixed(1)}" y2="${p1[1].toFixed(1)}"/>`;
+      if (major) { const pl = gPt(ang, G.r - 34); g += `<text x="${pl[0].toFixed(1)}" y="${pl[1].toFixed(1)}" dy="0.35em" text-anchor="middle">${a}</text>`; }
     }
-    const step = Math.max(1, Math.ceil((aHi - aLo) / Math.max(4, Math.floor(pw / 40))));
-    for (let a = Math.ceil(aLo / step) * step; a <= aHi; a += step) {
-      g += `<text x="${X(a).toFixed(1)}" y="${M.t + ph + 16}" text-anchor="middle">${a}</text>`;
+    g += `<text x="${gPt(gAngle(19), G.r - 46)[0].toFixed(1)}" y="${gPt(gAngle(19), G.r - 46)[1].toFixed(1)}" text-anchor="middle" style="fill:var(--ink-2);font-size:10px">OVER</text>`;
+    g += `<line class="needle" id="gNeedle" x1="${G.cx}" y1="${G.cy}" x2="${G.cx}" y2="${G.cy - G.r + 18}"/><circle class="hub" cx="${G.cx}" cy="${G.cy}" r="6"/>`;
+    g += `<text class="num" id="gNum" x="${G.cx}" y="${G.cy + 58}" text-anchor="middle">0.00</text><text class="unit" x="${G.cx}" y="${G.cy + 80}" text-anchor="middle">A · 電流</text>`;
+    $('gauge').innerHTML = g;
+  }
+  function renderLive(k) {
+    const r = run(), pace = paceSeries(r);
+    const a = r.i[k];
+    const ang = gAngle(a), tip = gPt(ang, G.r - 18);
+    const nd = $('gNeedle');
+    nd.setAttribute('x2', tip[0].toFixed(1)); nd.setAttribute('y2', tip[1].toFixed(1));
+    $('gFill').setAttribute('d', a > 0.01 ? arc(0, Math.min(a, MAX_A), G.r) : '');
+    $('gNum').textContent = a >= C.DEFAULT_OVER_A ? 'OVER' : a.toFixed(2);
+    $('gaugeTime').textContent = C.fmtTime(r.t[k] - r.t[0]);
+    const cells = [];
+    cells.push(ro('電圧', r.v[k].toFixed(2), 'V'));
+    cells.push(ro('電力', r.p[k].toFixed(0), 'W'));
+    cells.push(ro('積算', (r.q[k] - r.q[0]).toFixed(0), 'mAh', `記録上の値 ${r.q[k].toFixed(1)}`));
+    if (pace) {
+      const d = pace[k], over = d > 0;
+      cells.push(ro('予算との差', `${over ? '+' : '−'}${Math.abs(d).toFixed(0)}`, 'mAh', `<span class="${over ? 'bad' : 'good'}">${over ? '▲ 使いすぎ' : '▼ 余裕あり'}</span>`));
+      const p = C.pace(r, budget(), raceS(), k);
+      if (!p.finished) cells.push(ro('残りに使える電流', p.needA > 0 ? p.needA.toFixed(2) : '0.00', 'A', `残り ${C.fmtTime(p.remainS)} で ${Math.max(0, p.remainMah).toFixed(0)} mAh`, 'wide'));
+    } else {
+      cells.push(ro('経過', C.fmtTime(r.t[k] - r.t[0]), '', '予算を入れると差も出る'));
     }
-    const gapPx = bw > 6 ? 2 : 0;
-    h.forEach((b) => {
-      const pct = b.s / total * 100;
-      const x = X(b.a0) + gapPx / 2, w = Math.max(1, bw - gapPx), y0 = M.t + ph, y1 = Y(pct);
-      const hgt = y0 - y1;
-      if (hgt <= 0) return;
-      const rr = Math.min(4, w / 2, hgt);
-      const d = `M${x.toFixed(1)},${y0}V${(y1 + rr).toFixed(1)}Q${x.toFixed(1)},${y1.toFixed(1)} ${(x + rr).toFixed(1)},${y1.toFixed(1)}H${(x + w - rr).toFixed(1)}Q${(x + w).toFixed(1)},${y1.toFixed(1)} ${(x + w).toFixed(1)},${(y1 + rr).toFixed(1)}V${y0}Z`;
-      const over = b.a1 > C.DEFAULT_OVER_A;
-      g += `<path class="bar" d="${d}" style="fill:var(--s1)" data-tip="${b.a0}〜${b.a1} A：${C.fmtTime(b.s)}（${pct.toFixed(1)}%）${over ? ' ⚠ OVER を含む' : ''}"/>`;
-      // 当たり判定は棒より大きく (縦いっぱい)
-      g += `<rect class="hit" x="${X(b.a0).toFixed(1)}" y="${M.t}" width="${bw.toFixed(1)}" height="${ph}" data-tip="${b.a0}〜${b.a1} A：${C.fmtTime(b.s)}（${pct.toFixed(1)}%）${over ? ' ⚠ OVER を含む' : ''}"/>`;
-    });
-    g += `<line class="base" x1="${M.l}" x2="${M.l + pw}" y1="${M.t + ph}" y2="${M.t + ph}"/>`;
-    host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="電流の分布">${g}</svg>`;
-    bindBarTips(host);
+    $('live').innerHTML = cells.join('');
   }
 
-  function bindBarTips(host) {
+  // ---------------------------------------------------------------------------
+  //  電流の分布
+  function renderHist() {
+    const r = run(), { i0, i1, range } = scopeRange();
+    $('histScope').textContent = range ? `${C.fmtTime(r.t[i0] - r.t[0])}–${C.fmtTime(r.t[i1] - r.t[0])}` : '走行全体';
+    const h = C.histogram(r, i0, i1, 1).filter((b) => b.a1 > -1);
+    const host = $('hist');
+    const W = Math.max(260, host.clientWidth - 28 || 400), H = 200, HM = { l: 44, r: 10, t: 12, b: 24 };
+    const pw = W - HM.l - HM.r, ph = H - HM.t - HM.b;
+    if (!h.length) { host.innerHTML = '<p class="hint">データがありません</p>'; return; }
+    const total = h.reduce((s, b) => s + b.s, 0), maxPct = Math.max(...h.map((b) => b.s)) / total * 100;
+    const yt = C.niceTicks(0, maxPct, 4), yHi = Math.max(yt.ticks[yt.ticks.length - 1], maxPct);
+    const aLo = h[0].a0, aHi = h[h.length - 1].a1, bw = pw / (aHi - aLo);
+    const X = (a) => HM.l + (a - aLo) * bw, Y = (pct) => HM.t + (1 - pct / yHi) * ph;
+    let g = '';
+    for (const v of yt.ticks) {
+      g += `<line class="${v === 0 ? 'base' : 'grid'}" x1="${HM.l}" x2="${HM.l + pw}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/>`;
+      g += `<text x="${HM.l - 6}" y="${Y(v).toFixed(1)}" dy="0.32em" text-anchor="end">${v}%</text>`;
+    }
+    const step = Math.max(1, Math.ceil((aHi - aLo) / Math.max(4, Math.floor(pw / 40))));
+    for (let a = Math.ceil(aLo / step) * step; a <= aHi; a += step) g += `<text x="${X(a).toFixed(1)}" y="${HM.t + ph + 16}" text-anchor="middle">${a}A</text>`;
+    const gapPx = bw > 6 ? 2 : 0;
+    for (const b of h) {
+      const pct = b.s / total * 100, x = X(b.a0) + gapPx / 2, w = Math.max(1, bw - gapPx), y0 = HM.t + ph, y1 = Y(pct), hgt = y0 - y1;
+      const tipText = `${b.a0}〜${b.a1} A：${C.fmtTime(b.s)}（${pct.toFixed(1)}%）${b.a1 > C.DEFAULT_OVER_A ? ' ⚠ OVER を含む' : ''}`;
+      if (hgt > 0) {
+        const rr = Math.min(4, w / 2, hgt);
+        g += `<path d="M${x.toFixed(1)},${y0}V${(y1 + rr).toFixed(1)}Q${x.toFixed(1)},${y1.toFixed(1)} ${(x + rr).toFixed(1)},${y1.toFixed(1)}H${(x + w - rr).toFixed(1)}Q${(x + w).toFixed(1)},${y1.toFixed(1)} ${(x + w).toFixed(1)},${(y1 + rr).toFixed(1)}V${y0}Z" style="fill:${b.a1 > C.DEFAULT_OVER_A ? 'var(--warning)' : 'var(--trace-i)'}"/>`;
+      }
+      g += `<rect class="hit" x="${X(b.a0).toFixed(1)}" y="${HM.t}" width="${bw.toFixed(1)}" height="${ph}" data-tip="${esc(tipText)}"/>`;
+    }
+    g += `<line class="base" x1="${HM.l}" x2="${HM.l + pw}" y1="${HM.t + ph}" y2="${HM.t + ph}"/>`;
+    host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="電流の分布">${g}</svg>`;
     const tip = $('tip');
     host.querySelectorAll('[data-tip]').forEach((el) => {
       el.addEventListener('pointermove', (e) => {
-        tip.innerHTML = esc(el.dataset.tip);
-        tip.style.display = 'block';
+        tip.textContent = el.dataset.tip; tip.style.display = 'block';
         let left = e.clientX + 14; if (left + tip.offsetWidth > window.innerWidth - 8) left = e.clientX - tip.offsetWidth - 14;
-        tip.style.left = Math.max(8, left) + 'px'; tip.style.top = (e.clientY - tip.offsetHeight - 10) + 'px';
+        tip.style.left = Math.max(8, left) + 'px'; tip.style.top = Math.max(8, e.clientY - tip.offsetHeight - 10) + 'px';
       });
       el.addEventListener('pointerleave', () => { tip.style.display = 'none'; });
     });
   }
 
   // ---------------------------------------------------------------------------
-  //  走行の比較 (横 = 走行の始めからの時間、縦 = 使った量)
+  //  走行の比較
   function renderCompare() {
-    const host = $('compare');
-    const runs = state.runs.filter((r) => state.compare.has(r.key));
-    const B = budget(), R = raceS();
-    $('cmpLegend').innerHTML = runs.map((r) => `<span><i style="background:${slotColor(state.compare.get(r.key))}"></i>${esc(r.label)}</span>`).join('')
+    const host = $('compare'), runs = state.runs.filter((r) => state.compare.has(r.key)), B = budget(), R = raceS();
+    $('cmpLegend').innerHTML = runs.map((r) => `<span><i style="background:${slotColor(state.compare.get(r.key))}"></i>${esc(r.label)} ${(r.q[r.q.length - 1] - r.q[0]).toFixed(0)} mAh</span>`).join('')
       + (B && R && runs.length ? '<span><i style="background:var(--ink-2)"></i>予算ペース</span>' : '');
-    if (!runs.length) { host.innerHTML = '<p class="hint">一覧の「比較」に印を付けると、ここに重ねて表示します。</p>'; return; }
-    const W = Math.max(260, host.clientWidth || 400), H = 190;
-    const pw = W - M.l - M.r, ph = H - M.t - M.b;
+    if (!runs.length) { host.innerHTML = '<p class="hint">走行の一覧で印を付けると、ここに重ねて表示します。</p>'; return; }
+    const W = Math.max(260, host.clientWidth - 28 || 400), H = 200, CM = { l: 50, r: 12, t: 14, b: 24 };
+    const pw = W - CM.l - CM.r, ph = H - CM.t - CM.b;
     let tMax = 0, qMax = 0;
     for (const r of runs) { tMax = Math.max(tMax, r.t[r.t.length - 1] - r.t[0]); qMax = Math.max(qMax, r.q[r.q.length - 1] - r.q[0]); }
-    if (B && R) { tMax = Math.max(tMax, Math.min(R, tMax * 1.05)); qMax = Math.max(qMax, B * Math.min(tMax, R) / R); }
-    const xt = C.niceTicks(0, tMax, Math.max(3, Math.floor(pw / 80)));
-    const yt = C.niceTicks(0, qMax, 4);
+    if (B && R) qMax = Math.max(qMax, B * Math.min(tMax, R) / R);
+    const xt = C.niceTicks(0, tMax, Math.max(3, Math.floor(pw / 80))), yt = C.niceTicks(0, qMax, 4);
     const xHi = Math.max(tMax, 1), yHi = Math.max(yt.ticks[yt.ticks.length - 1], qMax, 1);
-    const X = (t) => M.l + t / xHi * pw, Y = (q) => M.t + (1 - q / yHi) * ph;
+    const X = (t) => CM.l + t / xHi * pw, Y = (q) => CM.t + (1 - q / yHi) * ph;
     let g = '';
     for (const v of yt.ticks) {
-      g += `<line class="${v === 0 ? 'base' : 'grid'}" x1="${M.l}" x2="${M.l + pw}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/>`;
-      g += `<text x="${M.l - 6}" y="${Y(v).toFixed(1)}" dy="0.32em" text-anchor="end">${fmtTick(v, yt.step)}</text>`;
+      g += `<line class="${v === 0 ? 'base' : 'grid'}" x1="${CM.l}" x2="${CM.l + pw}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/>`;
+      g += `<text x="${CM.l - 6}" y="${Y(v).toFixed(1)}" dy="0.32em" text-anchor="end">${fmtTick(v, yt.step)}</text>`;
     }
-    for (const t of xt.ticks) if (t <= xHi) g += `<text x="${X(t).toFixed(1)}" y="${M.t + ph + 16}" text-anchor="middle">${C.fmtTime(t)}</text>`;
-    if (B && R) {
-      const te = Math.min(R, xHi);
-      g += `<polyline class="ref" points="${X(0)},${Y(0)} ${X(te).toFixed(1)},${Y(B * te / R).toFixed(1)}"/>`;
-    }
-    const lines = [];
+    for (const t of xt.ticks) if (t <= xHi) g += `<text x="${X(t).toFixed(1)}" y="${CM.t + ph + 16}" text-anchor="middle">${C.fmtTime(t)}</text>`;
+    if (B && R) { const te = Math.min(R, xHi); g += `<polyline class="ref" points="${X(0)},${Y(0)} ${X(te).toFixed(1)},${Y(B * te / R).toFixed(1)}"/>`; }
+    const ends = [];
     for (const r of runs) {
       const rel = new Float64Array(r.t.length), qq = new Float64Array(r.t.length);
       for (let k = 0; k < r.t.length; k++) { rel[k] = r.t[k] - r.t[0]; qq[k] = r.q[k] - r.q[0]; }
@@ -784,32 +967,21 @@ footer li { margin: 2px 0; }
       const col = slotColor(state.compare.get(r.key));
       g += `<path class="line" d="${path}" style="stroke:${col}"/>`;
       const last = d[d.length - 1];
-      lines.push({ r, x: X(last.t), y: Y(last.y), col });
+      ends.push({ r, x: X(last.t), y: Y(last.y), col });
     }
-    // 直接ラベル (4 本まで)。重ならないように少しずらす
-    if (lines.length <= 4) {
-      lines.sort((a, b) => a.y - b.y);
-      // 線の終わりの少し下に置く。上端 (凡例のすぐ下) にはみ出さないように、間を 13px 以上あける
-      let prev = M.t + 2;
-      for (const l of lines) {
-        const yy = Math.max(l.y + 15, prev + 13); prev = yy;
-        g += `<text class="lbl" x="${(l.x - 4).toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="end">${esc(l.r.label)}</text>`;
-      }
-    }
-    g += `<line class="base" x1="${M.l}" x2="${M.l + pw}" y1="${M.t + ph}" y2="${M.t + ph}"/>`;
-    g += `<line class="xh" x1="0" x2="0" y1="${M.t}" y2="${M.t + ph}"/>`;
-    g += `<rect class="hit" x="${M.l}" y="${M.t}" width="${pw}" height="${ph}"/>`;
+    // 線の終わりに点を打つ (名前と最後の使用量は凡例に出す)
+    for (const l of ends) g += `<circle cx="${l.x.toFixed(1)}" cy="${l.y.toFixed(1)}" r="3.5" style="fill:${l.col};stroke:var(--panel);stroke-width:2"/>`;
+    g += `<line class="base" x1="${CM.l}" x2="${CM.l + pw}" y1="${CM.t + ph}" y2="${CM.t + ph}"/>`;
+    g += `<line class="hov" id="cmpHov" x1="0" x2="0" y1="${CM.t}" y2="${CM.t + ph}"/><rect class="hit" x="${CM.l}" y="${CM.t}" width="${pw}" height="${ph}"/>`;
     host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="走行ごとの使用量の比較">${g}</svg>`;
-    const svg = host.querySelector('svg'), hit = svg.querySelector('.hit'), xh = svg.querySelector('.xh'), tip = $('tip');
+    const svg = host.querySelector('svg'), hit = svg.querySelector('.hit'), hov = svg.querySelector('#cmpHov'), tip = $('tip');
     hit.addEventListener('pointermove', (e) => {
-      const b = svg.getBoundingClientRect();
-      const x = (e.clientX - b.left) * (W / b.width);
-      const t = Math.max(0, Math.min(xHi, (x - M.l) / pw * xHi));
-      xh.setAttribute('x1', X(t)); xh.setAttribute('x2', X(t)); xh.style.visibility = 'visible';
+      const b = svg.getBoundingClientRect(), x = (e.clientX - b.left) * (W / b.width);
+      const t = Math.max(0, Math.min(xHi, (x - CM.l) / pw * xHi));
+      hov.setAttribute('x1', X(t)); hov.setAttribute('x2', X(t)); hov.style.visibility = 'visible';
       const rows = runs.map((r) => {
-        const k = Math.min(r.t.length - 1, C.lowerBound(r.t, r.t[0] + t));
-        const has = r.t[r.t.length - 1] - r.t[0] >= t;
-        return `<tr><td><span class="swatch" style="background:${slotColor(state.compare.get(r.key))}"></span>${esc(r.label)}</td><td>${has ? (r.q[k] - r.q[0]).toFixed(0) + ' mAh' : '-'}</td></tr>`;
+        const k = Math.min(r.t.length - 1, C.lowerBound(r.t, r.t[0] + t)), has = r.t[r.t.length - 1] - r.t[0] >= t;
+        return `<tr><td><span class="swatch" style="background:${slotColor(state.compare.get(r.key))}"></span>${esc(r.label)}</td><td>${has ? (r.q[k] - r.q[0]).toFixed(0) + ' mAh' : '—'}</td></tr>`;
       });
       if (B && R) rows.push(`<tr><td>予算ペース</td><td>${(B * Math.min(t, R) / R).toFixed(0)} mAh</td></tr>`);
       tip.innerHTML = `<div class="t">始めから ${C.fmtTime(t)}</div><table>${rows.join('')}</table>`;
@@ -818,16 +990,19 @@ footer li { margin: 2px 0; }
       tip.style.left = Math.max(8, left) + 'px';
       tip.style.top = Math.max(8, Math.min(window.innerHeight - tip.offsetHeight - 8, e.clientY - tip.offsetHeight / 2)) + 'px';
     });
-    hit.addEventListener('pointerleave', () => { tip.style.display = 'none'; xh.style.visibility = 'hidden'; });
+    hit.addEventListener('pointerleave', () => { tip.style.display = 'none'; hov.style.visibility = 'hidden'; });
   }
 
   // ---------------------------------------------------------------------------
+  function renderScoped() { renderReadout(); renderCharts(); renderHist(); }
   function renderAll() {
-    if (state.active < 0 || !state.runs[state.active]) return;
-    renderRuns(); renderTiles(); renderCharts(); renderHist(); renderCompare();
+    if (state.active < 0 || !run()) return;
+    renderRunList(); renderTable(); renderReadout(); renderCharts(); renderHist(); renderCompare();
   }
   let resizeTimer = 0;
   window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderAll, 120); });
+  drawGaugeFrame();
+  loadSample();   // 開いたときはサンプルで動きを見せる (CSV を開くと置き換わる)
 })();
 </script>
 </body>
