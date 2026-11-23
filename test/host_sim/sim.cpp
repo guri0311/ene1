@@ -6,10 +6,12 @@
 // 使い方: sim <状態ファイル> <SDディレクトリ> < シナリオ
 //   状態ファイルには INA228・LCD・リセットで消えない RAM (.noinit) の中身を保存する。
 //   同じ状態ファイルで続けて起動すると「Nano だけのリセット」を再現できる。
+//   EEPROM の中身は <状態ファイル>.eeprom に保存し、電源投入 (cold) でも残す。
 #include "Arduino.h"
 #include "Wire.h"
 #include "SD.h"
 #include "SPI.h"
+#include "avr/eeprom.h"
 #include <vector>
 #include <sstream>
 #include <iostream>
@@ -27,6 +29,11 @@ bool g_sdCardPresent = true;
 std::string g_sdDir;
 int g_sdFlushCount = 0;
 int g_wireOverflow = 0;
+uint8_t  g_eeprom[E2END + 1];
+uint64_t g_eeReadyUs = 0;
+uint32_t g_eeWrites[E2END + 1];
+int      g_eeLastAddr = -1;
+void simEeWait() { if (g_us < g_eeReadyUs) simAdvanceUs(g_eeReadyUs - g_us); }
 
 #include <dirent.h>
 int simSdFileCount() {
@@ -228,6 +235,23 @@ bool simI2cRead(uint8_t a, uint8_t *d, uint8_t len) {
 // ---------------------------------------------------------------------------
 //  状態ファイル (Nano リセットをまたいで残るもの)
 // ---------------------------------------------------------------------------
+// EEPROM は電源を切っても残るので、cold でも読み込む (ファイルがなければ消去済み = 0xFF)
+static void loadEeprom(const std::string &path) {
+  memset(g_eeprom, 0xFF, sizeof g_eeprom);
+  FILE *fp = fopen(path.c_str(), "rb");
+  if (!fp) return;
+  if (fread(g_eeprom, 1, sizeof g_eeprom, fp) != sizeof g_eeprom || fread(g_eeWrites, sizeof g_eeWrites, 1, fp) != 1) {
+    memset(g_eeprom, 0xFF, sizeof g_eeprom);
+    memset(g_eeWrites, 0, sizeof g_eeWrites);
+  }
+  fclose(fp);
+}
+static void saveEeprom(const std::string &path) {
+  FILE *fp = fopen(path.c_str(), "wb");
+  fwrite(g_eeprom, 1, sizeof g_eeprom, fp);
+  fwrite(g_eeWrites, sizeof g_eeWrites, 1, fp);
+  fclose(fp);
+}
 static void saveState(const char *path) {
   FILE *fp = fopen(path, "wb");
   fwrite(&ina.config, sizeof ina.config, 1, fp);
@@ -298,6 +322,8 @@ int main(int argc, char **argv) {
   g_sdDir = argv[2];
   bool warm = std::string(argv[3]) == "warm";
   lcd.powerOn();
+  const std::string eePath = std::string(argv[1]) + ".eeprom";
+  loadEeprom(eePath);
   if (warm && loadState(argv[1])) {
     printf("  [Nano だけリセット: INA228 と .noinit RAM は前回のまま]\n");
   } else {
@@ -381,8 +407,21 @@ int main(int argc, char **argv) {
       check(lcd.busyViolations == 0 && lcd.earlyViolations == 0 && lcd.protoErrors == 0 && g_wireOverflow == 0 &&
             g_maxWdtGapUs < 8000000ULL, b);
     }
+    else if (cmd == "eeprom_tear") {  // 書いている途中で電源が落ちた: 最後に書いたバイトを壊す
+      if (g_eeLastAddr >= 0) g_eeprom[g_eeLastAddr] ^= 0x5A;
+      printf("  [EEPROM の 0x%03X を壊した (書き込み途中の電源断)]\n", g_eeLastAddr);
+    }
+    else if (cmd == "eeprom_erase") { memset(g_eeprom, 0xFF, sizeof g_eeprom); memset(g_eeWrites, 0, sizeof g_eeWrites); }
+    else if (cmd == "expect_ee_wear") {  // 1 バイトあたりの書き込み回数の最大
+      uint32_t mx = 0, total = 0;
+      for (uint32_t w : g_eeWrites) { if (w > mx) mx = w; total += w; }
+      double lim = num(is);
+      char b[160]; snprintf(b, sizeof b, "EEPROM の書き込み: 1 バイトあたり最大 %u 回 (≦ %.0f)、合計 %u バイト", mx, lim, total);
+      check(mx <= lim, b);
+    }
     else { printf("  ?? 不明なコマンド: %s\n", cmd.c_str()); g_fail++; }
   }
   saveState(argv[1]);
+  saveEeprom(eePath);
   return g_fail ? 1 : 0;
 }

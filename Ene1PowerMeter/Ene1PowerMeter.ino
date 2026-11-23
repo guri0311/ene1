@@ -11,11 +11,15 @@
  *                         10 秒以上押されたままなら配線のショートとみなして何もしない)
  *   SD カードの初期化は起動時だけ行う (走行中に NO SD になったら、電源を入れ直すまで記録しない)
  *
- * レース中の故障に備えた動作
+ * レース中の故障に備えた動作 (何が起きても、積算 mAh と電流の表示だけは続ける)
  *   - Nano だけがリセットされた場合 (ウォッチドッグ・書き込み・リセットボタン等)、
  *     INA228 の設定が残っていれば積算 mAh を消さずに続きから再開する (経過時間も可能なら復元)
  *   - 走行中に INA228 の設定が消えた (電源瞬断など) ことを検出したら、再設定して
  *     それまでの積算値を引き継ぐ
+ *   - 電力計の電源が全部落ちても、EEPROM に 2 秒ごとに保存した積算 mAh と経過時間から
+ *     続きを数える (0 に戻すのはボタンの 3 秒長押しだけ)
+ *   - 起動時に INA228 が見つからなくても止まらず、つながるまで探し続ける。
+ *     INA228 が読めない間も、最後に読めた積算 mAh を表示し続ける
  *   - LCD をノイズで化けたままにしないよう、5 秒ごとに初期化コマンドを再送する
  *   - SD カードが抜けたら、flush のたびの状態確認 (CMD13) で数秒以内に NO SD にする
  *   - I2C がノイズで固まっても Wire のタイムアウト (3ms) で復帰する
@@ -39,6 +43,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include <avr/wdt.h>
+#include <avr/eeprom.h>
 
 // ============================================================================
 //  ユーザー設定 (ここを変えるだけで調整できる)
@@ -62,6 +67,9 @@ constexpr uint16_t LOG_INTERVAL_MS = 50;
 // SD への書き込みを確定 (flush) する間隔 [ms]。電源が落ちたとき、最大でこの時間ぶんの行が残らない
 constexpr uint16_t LOG_FLUSH_MS    = 1000;
 constexpr uint16_t RESET_HOLD_MS   = 3000;     // 積算リセットの長押し時間 [ms]
+// 積算 mAh と経過時間を EEPROM に保存する間隔 [ms]。電源が全部落ちたとき、最大でこの時間ぶん
+// (と電源が落ちていた間) の積算が数えられない。短くすると EEPROM の書き換え寿命が縮む (下の EEPROM の節)
+constexpr uint16_t EE_SAVE_MS      = 2000;
 constexpr uint16_t BTN_STUCK_MS    = 10000;    // これ以上押されたままなら故障 (ショート) とみなす [ms]
 constexpr uint8_t  PIN_SD_CS       = 10;
 constexpr uint8_t  PIN_BTN         = 2;
@@ -168,7 +176,8 @@ struct Measurement {
   bool  ok;        // 直近の読み出しが成功したか
 };
 Measurement meas = {0, 0, 0, 0, false};
-bool haveMeas = false;            // 起動後に一度でも正しく読めたか
+// 最後に正しく読めた積算 mAh。INA228 が読めない間の表示、INA228 の再設定、EEPROM への保存に使う
+float lastKnownTotalmAh = 0;
 
 // INA228 が走行中に設定を失った (電源瞬断など) ときに、それまでの積算を引き継ぐための値。
 // 積算そのものは INA228 の CHARGE レジスタだけで行い、ソフトでは足し込まない
@@ -191,10 +200,22 @@ struct Persist {
   uint32_t magic;
   uint32_t elapsedMs;
   float    chargeOffsetmAh;
+  float    totalmAh;        // 最後に正しく読めた積算 (INA228 が設定を失っていたときに引き継ぐ)
   uint32_t check;
 };
 Persist persist __attribute__((section(".noinit")));
 constexpr uint32_t PERSIST_MAGIC = 0xE1E1C0DEUL;
+
+// EEPROM に保存する 1 回分 (下の「電源を切っても消えない保存」の節)。
+// Arduino IDE が関数の宣言を先頭に自動で足すので、型はここで定義しておく
+struct SavedRecord {
+  uint32_t seq;        // 書いた順番 (大きいほど新しい)
+  float    totalmAh;   // 積算 mAh
+  uint32_t elapsedMs;  // 経過時間
+  uint16_t magic;      // この形の記録であることの印
+  uint16_t crc;        // ここより前の 14 バイトの CRC
+};
+static_assert(sizeof(SavedRecord) == 16, "SavedRecord は 16 バイト");
 
 // ============================================================================
 //  ウォッチドッグ
@@ -366,8 +387,9 @@ bool inaResetCharge() {
 
 // 走行中に INA228 の設定が消えていたら、それまでの積算を引き継いで再設定する
 void inaRecover() {
-  // 最後に正しく読めた積算値を引き継ぐ (起動後まだ読めていなければ今のオフセットのまま)
-  if (haveMeas) chargeOffsetmAh = meas.chargemAh;
+  // 最後に正しく読めた積算値を引き継ぐ (起動後まだ読めていなければ、起動時に
+  // リセットで消えない RAM か EEPROM から戻した値)
+  chargeOffsetmAh = lastKnownTotalmAh;
   bool ok = inaConfigure();
   if (inaRecoverCount < 9) inaRecoverCount++;
 #if SERIAL_DEBUG
@@ -407,7 +429,7 @@ bool inaMeasure(Measurement &m) {
                 ((uint32_t)q[2] << 16) | ((uint32_t)q[3] << 8) | q[4];
   int64_t qraw = (qu & 0x8000000000ULL) ? (int64_t)qu - 0x10000000000LL : (int64_t)qu;
   m.chargemAh = (float)qraw * CHARGE_LSB_MAH + chargeOffsetmAh;
-  haveMeas = true;
+  lastKnownTotalmAh = m.chargemAh;
   return m.ok = true;
 }
 
@@ -415,20 +437,98 @@ bool inaMeasure(Measurement &m) {
 //  リセットされても消えない値 (経過時間・積算オフセット)
 // ============================================================================
 uint32_t persistCheckValue(const Persist &p) {
-  uint32_t qoff;
+  uint32_t qoff, qtot;
   memcpy(&qoff, &p.chargeOffsetmAh, sizeof(qoff));
-  return p.magic ^ p.elapsedMs ^ qoff ^ 0x5A5AA5A5UL;
+  memcpy(&qtot, &p.totalmAh, sizeof(qtot));
+  return p.magic ^ p.elapsedMs ^ qoff ^ (qtot * 3UL) ^ 0x5A5AA5A5UL;
 }
 
 void persistSave(uint32_t now) {
   persist.magic = PERSIST_MAGIC;
   persist.elapsedMs = now - timerStartMs;
   persist.chargeOffsetmAh = chargeOffsetmAh;
+  persist.totalmAh = lastKnownTotalmAh;
   persist.check = persistCheckValue(persist);
 }
 
 bool persistValid() {
   return persist.magic == PERSIST_MAGIC && persist.check == persistCheckValue(persist);
+}
+
+// ============================================================================
+//  電源を切っても消えない保存 (EEPROM)
+//  積算 mAh と経過時間を EE_SAVE_MS ごとに保存し、電力計の電源が全部落ちて戻ったときは
+//  続きから数える。
+//  - 1 回分 16 バイトを、64 か所に順番に書く (同じ場所への書き込みを 64 分の 1 にする)。
+//    2 秒ごとなら 1 か所は 128 秒に 1 回で、書き換え寿命 10 万回に届くのは約 3500 時間後
+//  - 書いている途中で電源が落ちた分は CRC で見分け、1 つ前の保存を使う
+//  - 1 バイトの書き込みに約 3.3ms かかるので、loop のたびに 1 バイトずつ書いて、
+//    表示と記録を止めない
+// ============================================================================
+constexpr uint16_t EE_MAGIC = 0xE1A1;
+constexpr uint8_t  EE_SLOTS = 64;
+static_assert((uint16_t)EE_SLOTS * sizeof(SavedRecord) <= E2END + 1, "EEPROM に収まらない");
+
+SavedRecord eeBuf;                          // 書き込み中の 1 回分
+uint32_t eeSeq        = 0;                  // 最後に書き始めた記録の順番
+uint16_t eeAddr       = 0;                  // 書き込み中の記録の先頭番地
+uint8_t  eeWriteIdx   = sizeof(SavedRecord); // 次に書くバイト (16 = 書き込み中でない)
+uint32_t lastEeSaveMs = 0;
+
+uint16_t crc16(const uint8_t *p, uint8_t n) {  // CRC-16/MODBUS
+  uint16_t c = 0xFFFF;
+  while (n--) {
+    c ^= *p++;
+    for (uint8_t i = 0; i < 8; i++) c = (c & 1) ? (c >> 1) ^ 0xA001 : c >> 1;
+  }
+  return c;
+}
+
+// 正しく書けている記録のうち一番新しいものを探す
+bool eeLoad(SavedRecord &best) {
+  bool found = false;
+  for (uint8_t slot = 0; slot < EE_SLOTS; slot++) {
+    SavedRecord r;
+    eeprom_read_block(&r, (const void *)(uintptr_t)(slot * sizeof(SavedRecord)), sizeof(r));
+    if (r.magic != EE_MAGIC || r.crc != crc16((const uint8_t *)&r, sizeof(r) - 2)) continue;
+    if (!(fabs(r.totalmAh) < 1e7f)) continue;  // NaN・無限大・ありえない値は使わない
+    if (!found || (int32_t)(r.seq - best.seq) > 0) { best = r; found = true; }
+  }
+  if (found) eeSeq = best.seq;
+  return found;
+}
+
+// 次の場所に書き始める (実際の書き込みは eeService が 1 バイトずつ行う)
+void eeStart(float totalmAh, uint32_t elapsedMs) {
+  eeBuf.seq = ++eeSeq;
+  eeBuf.totalmAh = totalmAh;
+  eeBuf.elapsedMs = elapsedMs;
+  eeBuf.magic = EE_MAGIC;
+  eeBuf.crc = crc16((const uint8_t *)&eeBuf, sizeof(eeBuf) - 2);
+  eeAddr = (uint16_t)(eeBuf.seq % EE_SLOTS) * sizeof(SavedRecord);
+  eeWriteIdx = 0;
+}
+
+// loop のたびに呼ぶ。前の書き込みが終わっていれば 1 バイト書く (待たない)
+void eeService() {
+  if (eeWriteIdx >= sizeof(eeBuf) || !eeprom_is_ready()) return;
+  eeprom_update_byte((uint8_t *)(uintptr_t)(eeAddr + eeWriteIdx), ((const uint8_t *)&eeBuf)[eeWriteIdx]);
+  eeWriteIdx++;
+}
+
+// 書きかけの記録を最後まで書く (待つ。積算リセットのときだけ使う)
+void eeFinish() {
+  while (eeWriteIdx < sizeof(eeBuf)) {
+    wdtKick();
+    eeprom_update_byte((uint8_t *)(uintptr_t)(eeAddr + eeWriteIdx), ((const uint8_t *)&eeBuf)[eeWriteIdx]);
+    eeWriteIdx++;
+  }
+}
+
+void eeSaveNow(float totalmAh, uint32_t elapsedMs) {
+  eeFinish();
+  eeStart(totalmAh, elapsedMs);
+  eeFinish();
 }
 
 // ============================================================================
@@ -455,8 +555,12 @@ void lcdShowMeasurement(uint32_t now) {
     snprintf_P(line, sizeof(line), PSTR("P:%4ldW  Q:%6ldmAh"), pw, mah);
     lcdLine(1, line);
   } else {
+    // INA228 が読めない間も、最後に読めた積算を出す (INA228 の中では積算が続いているので、
+    // 読めるようになれば正しい値に戻る)
     lcdLineP(0, F("INA228 I2C ERROR"));
-    lcdLineP(1, F("CHECK WIRING"));
+    long mah = lround(constrain(lastKnownTotalmAh, -99999.0f, 999999.0f));
+    snprintf_P(line, sizeof(line), PSTR("LAST    Q:%6ldmAh"), mah);
+    lcdLine(1, line);
   }
 
   // 3行目: 経過時間 (リセットから) "TIME  12:34"  (100 分以上は "123:45")
@@ -611,6 +715,8 @@ void doCounterReset() {
   chargeOffsetmAh = 0;
   inaRecoverCount = 0;
   meas.chargemAh = 0;
+  lastKnownTotalmAh = 0;
+  eeSaveNow(0, 0);  // 電源を切っても 0 から始まるように、すぐに保存する
   lcdLineP(0, ok ? F("RESET mAh") : F("RESET FAILED"));
   lcdLineP(1, F(""));
   lcdLineP(2, F(""));
@@ -675,10 +781,6 @@ uint16_t ramMinFree() {
 // ============================================================================
 //  setup / loop
 // ============================================================================
-void haltWithMessage() {
-  while (true) wdtKick();  // 仕様どおり停止 (ウォッチドッグでの再起動もしない)
-}
-
 void setup() {
 #if USE_WATCHDOG
   wdt_enable(WDTO_8S);
@@ -711,45 +813,56 @@ void setup() {
   lcdLineP(0, F("Ene-1 PowerMeter"));
   lcdLineP(1, F("starting..."));
 
-  // メーカー ID 確認 (0x3E = 0x5449)
+  // メーカー ID 確認 (0x3E = 0x5449)。配線の接触が一瞬悪いだけのこともあるので 1 秒ほど試す
   uint16_t id = 0;
-  if (!inaRead16(REG_MFG_ID, id) || id != 0x5449) {
-    char line[LCD_COLS + 1];
-    lcdLineP(0, F("INA228 NOT FOUND"));
-    snprintf_P(line, sizeof(line), PSTR("ID=%04X"), id);
-    lcdLine(1, line);
-    lcdLineP(2, F("CHECK I2C WIRING"));
-    lcdLineP(3, F("STOPPED"));
-#if SERIAL_DEBUG
-    Serial.println(F("INA228 not found"));
-#endif
-    haltWithMessage();
+  bool inaFound = false;
+  for (uint8_t k = 0; k < 20 && !inaFound; k++) {
+    inaFound = inaRead16(REG_MFG_ID, id) && id == 0x5449;
+    if (!inaFound) { delay(50); wdtKick(); }
   }
 
-  // INA228 の設定が残っている = INA228 は電源が切れておらず Nano だけがリセットされた。
-  // このときは積算 mAh を消さずに続きから再開する
-  uint32_t resumeElapsedMs = 0;
-  bool resumed = (inaCheckConfig() == INA_CONFIGURED);
-  if (resumed) {
-    if (persistValid()) {
-      resumeElapsedMs = persist.elapsedMs;
-      chargeOffsetmAh = persist.chargeOffsetmAh;
-    }
+  // 積算と経過時間の続きを探す。Nano だけのリセットならリセットで消えない RAM、
+  // 電源が全部落ちたあとなら EEPROM に残っている
+  SavedRecord saved;
+  bool eeOk = eeLoad(saved);
+  bool warmOk = persistValid();
+  float knownTotal = warmOk ? persist.totalmAh : eeOk ? saved.totalmAh : 0;
+  uint32_t knownElapsedMs = warmOk ? persist.elapsedMs : eeOk ? saved.elapsedMs : 0;
+  lastKnownTotalmAh = knownTotal;
+
+  uint8_t st = inaFound ? inaCheckConfig() : (uint8_t)INA_NO_RESPONSE;
+  uint32_t resumeElapsedMs = knownElapsedMs;
+  bool resumed = false;   // 積算を引き継いだ (表示を早く出すため、起動画面を短くする)
+  if (st == INA_CONFIGURED) {
+    // INA228 の設定が残っている = INA228 は電源が切れておらず Nano だけがリセットされた。
+    // INA228 の CHARGE はそのまま続いているので、オフセットだけ戻す
+    chargeOffsetmAh = warmOk ? persist.chargeOffsetmAh : 0;
+    if (!warmOk) resumeElapsedMs = 0;
+    resumed = true;
     lcdLineP(1, F("RESUMED (mAh KEPT)"));
+  } else if (st == INA_NOT_CONFIGURED) {
+    // INA228 も電源が入り直した (CHARGE は 0)。保存してあった積算から続ける
+    bool ok = inaConfigure();
+    chargeOffsetmAh = knownTotal;
+    resumed = warmOk || eeOk;
+    if (!ok) lcdLineP(0, F("INA228 CONFIG ERROR"));  // 止まらない。loop で設定し直す
+    lcdLineP(1, resumed ? F("RESTORED (mAh KEPT)") : F("INA228 OK"));
   } else {
-    if (!inaConfigure()) {
-      lcdLineP(0, F("INA228 CONFIG ERROR"));
-      lcdLineP(3, F("STOPPED"));
+    // INA228 が応答しない。止まらずに loop で探し続け、つながったら続きから数える
+    chargeOffsetmAh = warmOk ? persist.chargeOffsetmAh : knownTotal;
+    char line[LCD_COLS + 1];
+    lcdLineP(0, F("INA228 NOT FOUND"));
+    snprintf_P(line, sizeof(line), PSTR("ID=%04X RETRYING"), id);
+    lcdLine(1, line);
+    lcdLineP(2, F("CHECK I2C WIRING"));
 #if SERIAL_DEBUG
-      Serial.println(F("INA228 config error"));
+    Serial.println(F("INA228 not found (retrying)"));
 #endif
-      haltWithMessage();
-    }
-    lcdLineP(1, F("INA228 OK"));
   }
 #if SERIAL_DEBUG
   Serial.print(F("INA228: "));
-  Serial.println(resumed ? F("resumed (mAh kept)") : F("configured"));
+  Serial.println(st == INA_CONFIGURED ? F("resumed (mAh kept)") : st == INA_NO_RESPONSE ? F("no response")
+                 : resumed ? F("restored (mAh kept)") : F("configured"));
   Serial.print(F("SHUNT_CAL=")); Serial.println(SHUNT_CAL);
 #endif
 
@@ -759,15 +872,21 @@ void setup() {
 #if SERIAL_DEBUG
   Serial.println(F("time_s,voltage_V,current_A,power_W,charge_mAh"));
 #endif
-  delay(1500);
+  // 起動画面を見せる時間。積算を引き継いだときは、電流の表示を早く出すため短くする
+  delay(resumed ? 500 : 1500);
 
   restartTimer(resumeElapsedMs);
+  // 最新の積算を読んで、すぐに EEPROM へ保存し始める (起動直後に電源が落ちても、
+  // リセット前の保存まで戻らないように)
+  inaMeasure(meas);
   persistSave(millis());
+  lastEeSaveMs = millis() - EE_SAVE_MS;
 }
 
 void loop() {
   wdtKick();
   uint32_t now = millis();
+  eeService();  // EEPROM への保存を 1 バイト進める (待たない)
 
   handleButton(now);
 
@@ -782,6 +901,12 @@ void loop() {
     if (LOG_INTERVAL_MS > LCD_INTERVAL_MS) inaMeasure(meas);
     lcdShowMeasurement(now);
     persistSave(now);
+  }
+
+  // 積算 mAh と経過時間を EEPROM に保存し始める (前の保存を書き終えていれば)
+  if (now - lastEeSaveMs >= EE_SAVE_MS && eeWriteIdx >= sizeof(eeBuf)) {
+    lastEeSaveMs = now;
+    eeStart(lastKnownTotalmAh, now - timerStartMs);
   }
 
   if ((int32_t)(now - nextLogMs) >= 0) {

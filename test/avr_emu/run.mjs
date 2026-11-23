@@ -163,6 +163,11 @@ function newBoard(opts = {}) {
   return b;
 }
 function hold(b, ms) { b.setButton(true); b.run(ms); b.setButton(false); }
+// ms の間に LCD のその行に text が一度でも出たか (起動画面は短いので、こまめに見る)
+function sawLcd(b, row, text, ms) {
+  for (let t = 0; t < ms; t += 20) { if (b.lcd.row(row).includes(text)) return true; b.run(20); }
+  return b.lcd.row(row).includes(text);
+}
 
 // ---------------------------------------------------------------------------
 //  シナリオ
@@ -341,15 +346,13 @@ scenario('LCD がノイズで化ける → 5 秒以内に戻る', () => {
   expectClean(b);
 });
 
-scenario('Nano だけリセット → 積算と時間を引き継ぐ / 電源を入れ直すと 0', () => {
+scenario('Nano だけリセット → 積算と時間を引き継ぐ / 電源を入れ直しても EEPROM から続ける / 長押しで 0', () => {
   const b = newBoard({ i: 10 });
   b.run(40000);
   const q = lcdCharge(b);
   const t = b.lcd.row(2);
   b.resetMcu();
-  b.run(1200);
-  showLcd(b);
-  expectLcd(b, 1, 'RESUMED (mAh KEPT)');
+  check(sawLcd(b, 1, 'RESUMED (mAh KEPT)', 1500), '起動中に "RESUMED (mAh KEPT)" を表示した');
   b.run(2500);
   showLcd(b);
   expectSerial(b, /^INA228: resumed/, '"INA228: resumed (mAh kept)"');
@@ -358,21 +361,66 @@ scenario('Nano だけリセット → 積算と時間を引き継ぐ / 電源を
   console.log(`  [時間] リセット前 "${t.trim()}" → 後 "${b.lcd.row(2).trim()}"`);
   expectLcd(b, 3, 'REC LOG001.CSV');
   b.ina.setCurrent(0);
+  const q2 = lcdCharge(b);
+  b.powerCycle();
+  check(sawLcd(b, 1, 'RESTORED (mAh KEPT)', 1500), '起動中に "RESTORED (mAh KEPT)" を表示した');
+  b.run(2500);
+  showLcd(b);
+  expectSerial(b, /^INA228: restored/, '"INA228: restored (mAh kept)"');
+  // EEPROM への保存は 2 秒ごと (書き終えるまで約 0.05 秒)。10A で 2 秒 ≒ 5.6mAh と表示の丸めぶん減ることがある
+  check(lcdCharge(b) >= q2 - 7 && lcdCharge(b) <= q2, `電源を入れ直しても積算を続ける (${q2} → ${lcdCharge(b)} mAh)`);
+  check(/TIME  00:(39|4\d)/.test(b.lcd.row(2)), `経過時間も続ける (${b.lcd.row(2).trim()}、保存は 2 秒ごと)`);
+  expectLcd(b, 3, 'REC LOG002.CSV');
+  hold(b, 3500);
+  b.run(1500);
   b.powerCycle();
   b.run(3500);
   showLcd(b);
-  expectCharge(b, 0, 2);
+  expectCharge(b, 0, 1);
   expectLcd(b, 2, 'TIME  00:0');
-  expectLcd(b, 3, 'REC LOG002.CSV');
+  expectLcd(b, 3, 'REC LOG004.CSV');
   expectClean(b);
 });
 
-scenario('INA228 が見つからない → エラー表示で停止 (再起動を繰り返さない)', () => {
-  const b = newBoard({ noIna: true });
-  b.run(20000);
+scenario('電源断をばらばらの時刻に 6 回 (EEPROM の書き込み中も含む) → 毎回 0 に戻らず続きから数える', () => {
+  const b = newBoard({ i: 10 });
+  b.run(6000);
+  let prev = lcdCharge(b);
+  const delays = [2345, 3011, 4567, 2002, 5123, 3777];  // 2 秒ごとの保存とずらす
+  let worst = 0, ok = true, firstShowMs = 0;
+  for (const d of delays) {
+    b.run(d);
+    const before = lcdCharge(b);
+    b.powerCycle();
+    let t = 0;
+    while (t < 5000 && !/I: 10\.00A/.test(b.lcd.row(0))) { b.run(50); t += 50; }
+    firstShowMs = Math.max(firstShowMs, t);
+    b.run(600);
+    const after = lcdCharge(b);
+    worst = Math.max(worst, before - after);
+    if (!(after >= before - 7 && after >= prev)) ok = false;
+    console.log(`  [電源断] ${before} → ${after} mAh (電流の表示まで ${(t / 1000).toFixed(2)} 秒)`);
+    prev = after;
+  }
+  check(ok, `毎回、直前の値から 7mAh 以内で続きから数える (いちばん減ったのは ${worst} mAh)`);
+  check(firstShowMs <= 3000, `電源が戻ってから電流の表示まで ${(firstShowMs / 1000).toFixed(2)} 秒以内`);
+  expectClean(b);
+});
+
+scenario('起動時に INA228 が見つからない → 止まらずに探し続け、つながったら表示する (再起動を繰り返さない)', () => {
+  const b = newBoard({ noIna: true, i: 10 });
+  b.run(1500);
   showLcd(b);
   expectLcd(b, 0, 'INA228 NOT FOUND');
-  expectLcd(b, 3, 'STOPPED');
+  b.run(20000);
+  showLcd(b);
+  expectLcd(b, 0, 'INA228 I2C ERROR');
+  expectLcd(b, 1, 'LAST    Q:     0mAh');
+  b.ina.present = true;
+  b.run(36000);
+  showLcd(b);
+  expectLcd(b, 0, 'I: 10.00A');
+  expectCharge(b, 98, 101);
   check(b.resets.watchdog === 0, `ウォッチドッグによる再起動なし (${b.resets.watchdog} 回)`);
 });
 
