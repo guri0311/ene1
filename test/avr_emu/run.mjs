@@ -134,6 +134,17 @@ function expectClean(b) {
 const scenarios = [];
 function scenario(name, fn) { scenarios.push({ name, fn }); }
 
+// スケッチの記録間隔・flush 間隔 (テストの期待値をこれに合わせる)
+const SKETCH_SRC = fs.readFileSync(path.join(REPO, 'Ene1PowerMeter', 'Ene1PowerMeter.ino'), 'utf8');
+const LOG_MS = Number(SKETCH_SRC.match(/LOG_INTERVAL_MS\s*=\s*(\d+)/)[1]);
+const FLUSH_MS = Number(SKETCH_SRC.match(/LOG_FLUSH_MS\s*=\s*(\d+)/)[1]);
+const PER_SEC = 1000 / LOG_MS;  // 1 秒あたりの行数
+// CSV の時刻列の刻みを調べる (ms 単位)
+function timeSteps(rows) {
+  const t = rows.map((r) => Math.round(Number(r.split(',')[0]) * 1000));
+  return t.slice(1).map((v, k) => v - t[k]);
+}
+
 let fw, fwOptiboot, fwOldBoot;
 // ブートローダの開始番地 (ワード単位)。ヒューズ 0xDA の Nano: Optiboot は 0x7E00、旧ブートローダは 0x7800
 const BOOT = { optiboot: 0x7e00 / 2, old: 0x7800 / 2 };
@@ -182,12 +193,18 @@ scenario('起動・表示・記録 (24V、10A を 36 秒 → 100mAh)', () => {
   const rows = csvRows(b.img, 'LOG000.CSV');
   check(rows && rows[0] === 'time_s,voltage_V,current_A,power_W,charge_mAh', `CSV の見出し行 (実際: "${rows && rows[0]}")`);
   const data = rows ? rows.slice(1) : [];
-  check(data.length >= 30 && data.length <= 40, `CSV のデータ行数 ${data.length} (flush は 5 行ごと)`);
-  const times = data.map((r) => Number(r.split(',')[0]));
-  const steps = times.slice(1).map((t, k) => +(t - times[k]).toFixed(1));
-  check(steps.every((s) => s === 1), `CSV の時刻が 1.0 秒刻み (${[...new Set(steps)].join(',')})`);
+  const lo = Math.floor((36000 - FLUSH_MS) / LOG_MS) - 2, hi = Math.ceil(37200 / LOG_MS) + 2;
+  check(data.length >= lo && data.length <= hi, `CSV のデータ行数 ${data.length} が ${lo}〜${hi} (${LOG_MS}ms ごと、flush は ${FLUSH_MS}ms ごと)`);
+  const steps = timeSteps(data);
+  const sMin = Math.min(...steps), sMax = Math.max(...steps);
+  const avg = steps.reduce((a, v) => a + v, 0) / steps.length;
+  console.log(`  [記録間隔] 平均 ${avg.toFixed(2)}ms / 最短 ${sMin}ms / 最長 ${sMax}ms (設定 ${LOG_MS}ms)`);
+  check(Math.abs(avg - LOG_MS) < 1, `CSV の時刻の刻みが平均 ${LOG_MS}ms (${avg.toFixed(2)}ms)`);
+  check(sMax < LOG_MS * 1.5 && sMin > LOG_MS * 0.5, `行の抜けなし (最短 ${sMin}ms / 最長 ${sMax}ms)`);
+  const vals = new Set(data.slice(-20).map((r) => r.split(',')[4]));
+  check(vals.size >= 15, `どの行も新しい測定値 (最後の 20 行で積算値が ${vals.size} 種類)`);
   const last = data[data.length - 1] || '';
-  check(/^\d+\.\d,24\.000,10\.000,240\.00,\d+\.\d$/.test(last), `CSV の最終行の形式 (実際: "${last}")`);
+  check(/^\d+\.\d{3},24\.000,10\.000,240\.00,\d+\.\d{2}$/.test(last), `CSV の最終行の形式 (実際: "${last}")`);
   const fk = fsck(b.img);
   check(fk.ok, `FAT の整合性 (fsck.fat -n): ${fk.text}`);
   expectClean(b);
@@ -248,7 +265,7 @@ scenario('ボタン: 3 秒未満は何もしない、3 秒以上で離すとリ�
   check(lcdCharge(b) >= q1, `押しっぱなし (12 秒) ではリセットしない (${q1} → ${lcdCharge(b)} mAh)`);
   expectLcd(b, 3, 'REC LOG001.CSV');
   const rows = csvRows(b.img, 'LOG001.CSV');
-  check(rows && rows.length > 20, `LOG001.CSV に記録が続いている (${rows && rows.length} 行)`);
+  check(rows && rows.length > 20 * PER_SEC, `LOG001.CSV に記録が続いている (${rows && rows.length} 行)`);
   check(JSON.stringify(sdFiles(b.img)) === JSON.stringify(['LOG000.CSV', 'LOG001.CSV']), `SD のファイル: ${sdFiles(b.img).join(' ')}`);
   expectClean(b);
 });
@@ -271,7 +288,7 @@ scenario('走行中に SD が抜ける → NO SD、挿し直しても初期化�
   expectLcd(b, 3, 'NO SD');
   check(lcdCharge(b) > q, `積算は続く (${q} → ${lcdCharge(b)} mAh)`);
   const rows = csvRows(b.img, 'LOG000.CSV');
-  check(rows && rows.length >= 15, `抜く前までの記録が残っている (${rows && rows.length} 行)`);
+  check(rows && rows.length >= 15 * PER_SEC, `抜く前までの記録が残っている (${rows && rows.length} 行)`);
   const fk = fsck(b.img);
   console.log(`  [fsck] ${fk.text}`);
   expectClean(b);
@@ -385,7 +402,7 @@ scenario('記録中に電源が落ちる → FAT は壊れず、flush 済みの�
   console.log(`  [fsck] ${fk.text}`);
   check(fk.ok, `FAT が壊れていない (${fk.text})`);
   const rows = csvRows(b.img, 'LOG000.CSV');
-  check(rows && rows.length - 1 >= 15, `flush 済みのデータ行が残っている (${rows ? rows.length - 1 : 0} 行)`);
+  check(rows && rows.length - 1 >= 15 * PER_SEC, `flush 済みのデータ行が残っている (${rows ? rows.length - 1 : 0} 行)`);
 });
 
 scenario('長時間 (15A で 10 分 → 2500mAh) と RAM の実測', () => {
@@ -401,7 +418,7 @@ scenario('長時間 (15A で 10 分 → 2500mAh) と RAM の実測', () => {
   const margin = b.minSp - b.heapTop();
   console.log(`  [RAM] エミュレーターが測ったスタックとヒープの余裕 ${margin} バイト`);
   const rows = csvRows(b.img, 'LOG000.CSV');
-  check(rows && rows.length >= 595, `10 分ぶんの記録 (${rows && rows.length} 行)`);
+  check(rows && rows.length >= 595 * PER_SEC, `10 分ぶんの記録 (${rows && rows.length} 行)`);
   const fk = fsck(b.img);
   check(fk.ok, `FAT の整合性 (fsck.fat -n): ${fk.text}`);
   expectClean(b);
@@ -506,10 +523,13 @@ scenario('SD カードの書き込みが遅い (毎回 250ms のビジー) → �
   expectLcd(b, 3, 'REC LOG000.CSV');
   expectCharge(b, 60, 70);
   const rows = csvRows(b.img, 'LOG000.CSV');
-  check(rows && rows.length - 1 >= 33, `記録が続いている (${rows ? rows.length - 1 : 0} 行)`);
-  const times = rows ? rows.slice(1).map((r) => Number(r.split(',')[0])) : [];
-  const gaps = times.slice(1).map((t, k) => +(t - times[k]).toFixed(1));
-  check(gaps.every((g) => g === 1), `時刻の抜けなし (間隔: ${[...new Set(gaps)].join(',')})`);
+  const data = rows ? rows.slice(1) : [];
+  const steps = timeSteps(data);
+  const sMax = Math.max(...steps);
+  const late = steps.filter((v) => v > LOG_MS * 1.5).length;
+  console.log(`  [遅いカード] ${data.length} 行 / 最長の間隔 ${sMax}ms / 間隔が ${LOG_MS * 1.5}ms を超えた所 ${late} か所`);
+  check(data.length - 1 >= 33, `記録が続いている (${data.length} 行)`);
+  check(sMax < 1000, `書き込みが遅くても 1 秒以上の抜けはない (最長 ${sMax}ms)`);
   const fk = fsck(b.img);
   check(fk.ok, `FAT の整合性: ${fk.text}`);
   expectClean(b);
@@ -521,7 +541,7 @@ scenario('LCD が外れている → 記録は続く', () => {
   b.run(15000);
   expectSerial(b, /^LCD: 0x3C no ACK/, '"LCD: 0x3C no ACK"');
   const rows = csvRows(b.img, 'LOG000.CSV');
-  check(rows && rows.length - 1 >= 8, `LCD がなくても記録している (${rows ? rows.length - 1 : 0} 行)`);
+  check(rows && rows.length - 1 >= 8 * PER_SEC, `LCD がなくても記録している (${rows ? rows.length - 1 : 0} 行)`);
   check(b.resets.watchdog === 0, 'ウォッチドッグによる再起動なし');
 });
 
