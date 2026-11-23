@@ -1,5 +1,5 @@
 # Ene1PowerMeter のテストを push / PR のたびに自動で回す
-#   host-sim : スケッチを PC 用にコンパイルして動かす (速い)
+#   host-sim : スケッチを PC 用にコンパイルして動かす (速い)。ログビューアの計算もここで確かめる
 #   avr-emu  : 実機に書き込むのと同じ .hex を ATmega328P エミュレーターで動かす (約 8 分)
 name: test
 
@@ -30,6 +30,8 @@ jobs:
         run: bash test/host_sim/run_tests.sh
       - name: シミュレーション (メモリ破壊・未定義動作の検査付き)
         run: SIM_SANITIZE=1 bash test/host_sim/run_tests.sh
+      - name: ログビューアの計算 (シミュレーションが作った CSV を読む)
+        run: bash test/log_viewer/run_tests.sh
 
   avr-emu:
     name: 実機バイナリのエミュレーター

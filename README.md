@@ -98,6 +98,17 @@ time_s,voltage_V,current_A,power_W,charge_mAh
 積算 mAh は記録間隔や平均回数に関係なく、INA228 がすべての変換結果を足し込んでいる（データシート 7.3.2）。
 書き込みの遅い SD カードでは、書き込みを確定するたびに最大 0.75 秒ほど行が抜けることがある（表示と積算は止まらない）。
 
+### ログを見る（tools/log_viewer）
+
+[tools/log_viewer/index.html](tools/log_viewer/index.html) をブラウザで開き、SD カードの CSV をまとめて選ぶ（ドラッグでもよい）。インターネットにつながっていなくても動くので、サーキットのピットでも使える。`index.html` と `logviewer-core.js` を同じフォルダに置いておく。データは端末の外に送らない。
+
+- **走行のつなぎ方**：Nano のリセットで分かれたファイル（時刻が続いている）は 1 つの走行につなぐ。ボタンの積算リセットや電源の入れ直しで時刻が 0 に戻ったファイルは、別の走行にする
+- **数字のまとめ**：使用量 mAh、平均・最大電流、最低電圧、電力量 Wh、ばらつき（電流の 2 乗平均 ÷ 平均。電池の中の損失は一定電流のときの「ばらつき²」倍）、OVER（20A に張り付いた時間）、記録なし
+- **グラフ**：電流・電圧・電力・積算の時間変化。ドラッグで範囲を選ぶとその範囲の数字が出て、拡大もできる。Nano のリセット・記録の抜け・OVER の位置に印を付ける
+- **ペース配分**：使える量（mAh）とレース時間を入れると、積算のグラフに均等に使い切る線を引き、差と残りに使える電流を出す
+- **比較**：複数の走行の使用量を、走行の始めからの時間で重ねる。「別の日のログを追加」で、別の SD カードのログも並べられる
+- 「サンプルで試す」で、作りもののデータで動きを見られる
+
 ## ビルド
 
 必要なライブラリ: SD（Wire / SPI は標準）
@@ -112,7 +123,7 @@ arduino-cli compile --fqbn arduino:avr:nano Ene1PowerMeter
 
 ## テスト
 
-push と PR のたびに、GitHub Actions（[.github/workflows/test.yml](.github/workflows/test.yml)）が下の 2 つのテストを自動で回す。結果はリポジトリの Actions タブと PR の画面に出る。Arduino のコアと SD ライブラリのバージョンは workflow の中で固定している。
+push と PR のたびに、GitHub Actions（[.github/workflows/test.yml](.github/workflows/test.yml)）が下の 3 つのテストを自動で回す。結果はリポジトリの Actions タブと PR の画面に出る。Arduino のコアと SD ライブラリのバージョンは workflow の中で固定している。
 
 ### 実機バイナリのエミュレーターテスト（test/avr_emu）
 
@@ -134,6 +145,14 @@ cd test/avr_emu && node run.mjs
 
 ```bash
 bash test/host_sim/run_tests.sh
+```
+
+### ログビューアの計算（test/log_viewer）
+
+PC 上のシミュレーションでスケッチを動かして CSV を作り、ログビューアの計算部分（`logviewer-core.js`）で読んで、走行のつなぎ方・集計・ペース配分が正しいかを確かめる。スケッチの CSV の形が変わってビューアが読めなくなったら、ここで気づける。必要なもの: g++、Node.js
+
+```bash
+bash test/log_viewer/run_tests.sh
 ```
 
 ## 校正
