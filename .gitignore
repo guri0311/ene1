@@ -7,3 +7,6 @@ build/
 
 # エミュレーターテストの依存パッケージ
 node_modules/
+
+# 鈴鹿シミュレーションが書き出す CSV (node tools/suzuka_sim/cli.mjs で作り直せる)
+tools/suzuka_sim/out/
