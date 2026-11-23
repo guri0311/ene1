@@ -143,12 +143,20 @@
     cutoffCellV: 0.95,     // これより電圧が下がるとコントローラーが電流を絞る [V/本]
     maxCurrentA: 10,       // 電池から取る電流の上限 [A]。ブレーカーの定格に合わせる
     // サーキットブレーカー (熱動式)。定格を超えた分 ((I/定格)^2 - 1) を時間で積み、breakerHeatS に達すると
-    // 切れる。2 倍の電流で約 20 秒、1.5 倍で約 50 秒、1.2 倍で約 2 分 (一般的な熱動式の形に合わせた近似。
-    // 使うブレーカーの動作特性曲線があれば合わせる)。定格以下では少しずつ冷える
+    // 切れる。チームの見立て「12A なら 1 分くらい耐える」に合わせ、12A で 60 秒 (15A で約 21 秒、20A で約 9 秒)。
+    // 定格より下では冷える (0A なら breakerCoolS で元に戻る)
     breakerA: 10,
-    breakerHeatS: 60,
+    breakerHeatS: 26.4,    // = ((12/10)^2 - 1) x 60 秒
     breakerCoolS: 30,      // 定格以下で冷えて元に戻るまでの時間の目安
     breakerResetS: 60,     // 切れたら止まって、冷えてから入れ直すまでの時間 [s]
+    // 上りだけ電流を増やす走り方: 勾配が boostGrade より急な上りで、ブレーカーの熱が boostHeatMax (0〜1) より
+    // 少ない間だけ、電池の電流を boostA まで流す (null なら増やさない)
+    boostA: null,
+    boostGrade: 0.02,
+    boostHeatMax: 0.8,
+    // 下りで冷ます: 勾配が downhillGrade より急な下りでは、電池の電流を downhillA までに絞る (null なら絞らない)
+    downhillA: null,
+    downhillGrade: -0.01,
     // ドライバー
     cruiseKmh: 120,        // 平らな所で保つ速さ (大きくすると、出せる限りの全開)
     accel: 1.0,            // 目標の速さまでの加速 [m/s^2] (モーターの力で頭打ちになる)
@@ -216,12 +224,12 @@
 
   // 駆動: 欲しいタイヤの力 fWant [N]、速さ v [m/s] のとき、実際の力・電池の電流・モーター電流を求める。
   // 界磁の強さ k (1 = 特性図のまま) を、いちばん大きな力が出るものに選ぶ (可変界磁・自動進角)
-  function drive(fWant, v, usedAh, bat, p) {
+  function drive(fWant, v, usedAh, bat, p, capA) {
     const rw = p.tireDiameterM / 2;
     const w = Math.max(v / rw * p.gearRatio, 1e-3);          // モーターの角速度
     const ocv = bat.ocv(usedAh), vCut = p.cutoffCellV * p.series;
     const toTorque = rw / (p.gearRatio * p.chainEff);
-    const ibCap = Math.min(p.maxCurrentA, Math.max(0, (ocv - vCut) / bat.R));
+    const ibCap = Math.min(capA, Math.max(0, (ocv - vCut) / bat.R));
     let best = { force: 0, ib: 0, vb: ocv, im: 0, k: 1 };
     const steps = 6;
     for (let s = 0; s <= steps; s++) {
@@ -302,7 +310,10 @@
           if (p.coastBelowGrade !== null && grade < p.coastBelowGrade) fWant = 0;
           fWant = Math.max(0, fWant);
         }
-        const dr = fWant > 0 ? drive(fWant, v, usedAh, bat, p) : { force: 0, ib: 0, vb: bat.ocv(usedAh), im: 0 };
+        const boosting = p.boostA !== null && grade > p.boostGrade && heat < p.boostHeatMax * p.breakerHeatS;
+        let capA = boosting ? Math.max(p.boostA, p.maxCurrentA) : p.maxCurrentA;
+        if (p.downhillA !== null && grade < p.downhillGrade) capA = Math.min(capA, p.downhillA);
+        const dr = fWant > 0 ? drive(fWant, v, usedAh, bat, p, capA) : { force: 0, ib: 0, vb: bat.ocv(usedAh), im: 0 };
         const fMotor = Math.min(dr.force, fWant);
         const i = dr.ib, volt = dr.vb;
         const wasTripped = tripped;
@@ -385,18 +396,39 @@
     return lo;
   }
 
-  // ログビューア用: 走り方を比べる (全開・ちょうど使い切る・控えめ・電流制限 14A)
+  // 上りだけ電流を増やす走り方の組み合わせを探す。ブレーカーが切れず、電池が share 以下で、3 回の合計が
+  // いちばん短いもの。戻り値は { params, result, tried }
+  function optimizeBoost(params, share) {
+    share = share || 0.95;
+    const base = Object.assign({}, params || {});
+    const ok = (r) => !r.dnf && r.trips === 0 && r.usedMah <= share * r.capacityMah;
+    let best = null, tried = 0;
+    const consider = (x) => {
+      const r = simulate(Object.assign({}, base, x, { dt: 0.2 }));
+      tried++;
+      if (ok(r) && (!best || r.totalLapS < best.coarse)) best = { x, coarse: r.totalLapS };
+    };
+    consider({});
+    for (const boostA of [11, 12, 13, 14, 16, 18]) for (const boostGrade of [0.01, 0.02, 0.03, 0.045])
+      for (const boostHeatMax of [0.6, 0.85]) for (const downhillA of [null, 8, 5])
+        consider({ boostA, boostGrade, boostHeatMax, downhillA });
+    const result = simulate(Object.assign({}, base, best.x));
+    return { params: best.x, result, tried, ok: ok(result) };
+  }
+
+  // ログビューア用: 走り方を比べる (全開・上りだけ増やす・控えめ・12A 全開)
   function strategies(params, share) {
     share = share || 0.95;
     const base = Object.assign({}, params || {});
     const p = Object.assign({}, DEFAULTS, base);
-    const cJust = findCruise(base, share);
     const cEco = findCruise(base, 0.8);
-    const list = [{ key: 'full', name: `${p.maxCurrentA}A 全開`, note: `電池から ${p.maxCurrentA}A まで、出せる限り`, params: { cruiseKmh: 120 } }];
-    // 全開でも使い切らないときは「ちょうど使い切る」は全開と同じなので出さない
-    if (cJust < 120) list.push({ key: 'just', name: 'ちょうど使い切る', note: `容量の ${Math.round(share * 100)}% を使う速さ (${cJust} km/h まで)`, params: { cruiseKmh: cJust } });
+    const boost = { cruiseKmh: 120, boostA: 12, boostGrade: 0.02, boostHeatMax: 0.85 };
+    const list = [
+      { key: 'full', name: `${p.maxCurrentA}A 全開`, note: `電池から ${p.maxCurrentA}A まで、出せる限り`, params: { cruiseKmh: 120 } },
+      { key: 'boost', name: '上りだけ 12A', note: '勾配 2% より急な上りで、ブレーカーの熱が 85% になるまで 12A', params: boost },
+    ];
     if (cEco < 120) list.push({ key: 'eco', name: '控えめ', note: `容量の 80% を使う速さ (${cEco} km/h まで)`, params: { cruiseKmh: cEco } });
-    list.push({ key: 'limit14', name: '電流制限 14A', note: `ブレーカー ${p.breakerA}A より上に設定`, params: { cruiseKmh: 120, maxCurrentA: 14 } });
+    list.push({ key: 'over12', name: '12A 全開', note: `ずっと 12A (ブレーカー ${p.breakerA}A は 12A で約 1 分で切れる)`, params: { cruiseKmh: 120, maxCurrentA: 12 } });
     return list.map((st) => Object.assign(st, { result: simulate(Object.assign({}, base, st.params)) }));
   }
 
@@ -413,6 +445,6 @@
 
   return {
     LAP_M, ELEVATION, SECTIONS, CORNERS, MOTOR, DEFAULTS, elevationAt, gradeAt, sectionAt, speedLimit, cornerKmh,
-    motorAt24V, simulate, findCruise, forLapTime, maxCdAFor, strategies, toCsv,
+    motorAt24V, simulate, findCruise, forLapTime, maxCdAFor, optimizeBoost, strategies, toCsv,
   };
 });

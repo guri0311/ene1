@@ -33,11 +33,11 @@ const p0 = Object.assign({}, S.DEFAULTS, base);
 // ---------------------------------------------------------------------------
 //  走り方
 const SHARE = 0.95;   // 容量の 95% を使い切る目標 (残り 5% は個体差と見積もりの誤差のため)
-const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+const mmss = (s) => { const t = Math.round(s); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 console.log('# 鈴鹿サーキット フルコース 5.807km × 3 回タイムアタックのシミュレーション\n');
 console.log(`車: ${p0.massKg}kg、Crr ${p0.crr}、CdA ${p0.cdA}m²、モーター ${S.MOTOR.name} (可変界磁 ${p0.fieldMin} まで)、ギア比 ${p0.gearRatio.toFixed(2)}、タイヤ外径 ${p0.tireDiameterM}m`);
 console.log(`電池: 単3 ${p0.series}直列×${p0.parallel}並列 (${p0.cellMah * p0.parallel}mAh、内部抵抗 ${p0.cellOhm * 1000}mΩ/本 → ${(p0.cellOhm * p0.series / p0.parallel).toFixed(2)}Ω)`);
-console.log(`ブレーカー: ${p0.breakerA}A (2 倍で約 ${Math.round(p0.breakerHeatS / 3)} 秒で切れる近似)、アタックの間の待ち ${p0.waitS} 秒\n`);
+console.log(`ブレーカー: ${p0.breakerA}A (12A で約 ${Math.round(p0.breakerHeatS / 0.44)} 秒で切れる近似)、ブレーキはシケインだけ (${p0.chicaneKmh}km/h)、アタックの間の待ち ${p0.waitS} 秒\n`);
 console.log('| 走り方 | 平らな所の速さ | 1回目 | 2回目 | 3回目 | 合計 | 使った量 | 最大電流 | 最低電圧 | ブレーカー |');
 console.log('|---|---|---|---|---|---|---|---|---|---|');
 const results = S.strategies(base, SHARE).map((st) => ({ st, r: st.result }));
