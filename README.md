@@ -123,6 +123,8 @@ arduino-cli compile --fqbn arduino:avr:nano Ene1PowerMeter
 
 ## テスト
 
+push と PR のたびに、GitHub Actions（[.github/workflows/test.yml](.github/workflows/test.yml)）が下の 2 つのテストを自動で回す。結果はリポジトリの Actions タブと PR の画面に出る。Arduino のコアと SD ライブラリのバージョンは workflow の中で固定している。
+
 ### 実機バイナリのエミュレーターテスト（test/avr_emu）
 
 実機に書き込むのと同じ .hex を ATmega328P エミュレーター（[avr8js](https://github.com/wokwi/avr8js)）で動かす。I2C には INA228 と LCD（RW1063）のモデル、SPI には FAT32 イメージを持つ SD カードのモデルをつなぎ、Optiboot・旧ブートローダも一緒に動かして確認する。CSV はイメージから読み出し、FAT の整合性は `fsck.fat` で確かめる。
