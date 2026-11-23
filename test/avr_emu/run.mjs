@@ -163,6 +163,11 @@ function newBoard(opts = {}) {
   return b;
 }
 function hold(b, ms) { b.setButton(true); b.run(ms); b.setButton(false); }
+// ms の間に LCD のその行に text が一度でも出たか (起動画面は短いので、こまめに見る)
+function sawLcd(b, row, text, ms) {
+  for (let t = 0; t < ms; t += 20) { if (b.lcd.row(row).includes(text)) return true; b.run(20); }
+  return b.lcd.row(row).includes(text);
+}
 
 // ---------------------------------------------------------------------------
 //  シナリオ
@@ -347,9 +352,7 @@ scenario('Nano だけリセット → 積算と時間を引き継ぐ / 電源を
   const q = lcdCharge(b);
   const t = b.lcd.row(2);
   b.resetMcu();
-  b.run(1200);
-  showLcd(b);
-  expectLcd(b, 1, 'RESUMED (mAh KEPT)');
+  check(sawLcd(b, 1, 'RESUMED (mAh KEPT)', 1500), '起動中に "RESUMED (mAh KEPT)" を表示した');
   b.run(2500);
   showLcd(b);
   expectSerial(b, /^INA228: resumed/, '"INA228: resumed (mAh kept)"');
@@ -360,15 +363,13 @@ scenario('Nano だけリセット → 積算と時間を引き継ぐ / 電源を
   b.ina.setCurrent(0);
   const q2 = lcdCharge(b);
   b.powerCycle();
-  b.run(1200);
-  showLcd(b);
-  expectLcd(b, 1, 'RESTORED (mAh KEPT)');
+  check(sawLcd(b, 1, 'RESTORED (mAh KEPT)', 1500), '起動中に "RESTORED (mAh KEPT)" を表示した');
   b.run(2500);
   showLcd(b);
   expectSerial(b, /^INA228: restored/, '"INA228: restored (mAh kept)"');
-  // EEPROM への保存は 2 秒ごと。10A で 2 秒 ≒ 5.6mAh まで減ることがある
-  check(lcdCharge(b) >= q2 - 6 && lcdCharge(b) <= q2, `電源を入れ直しても積算を続ける (${q2} → ${lcdCharge(b)} mAh)`);
-  expectLcd(b, 2, 'TIME  00:4');
+  // EEPROM への保存は 2 秒ごと (書き終えるまで約 0.05 秒)。10A で 2 秒 ≒ 5.6mAh と表示の丸めぶん減ることがある
+  check(lcdCharge(b) >= q2 - 7 && lcdCharge(b) <= q2, `電源を入れ直しても積算を続ける (${q2} → ${lcdCharge(b)} mAh)`);
+  check(/TIME  00:(39|4\d)/.test(b.lcd.row(2)), `経過時間も続ける (${b.lcd.row(2).trim()}、保存は 2 秒ごと)`);
   expectLcd(b, 3, 'REC LOG002.CSV');
   hold(b, 3500);
   b.run(1500);

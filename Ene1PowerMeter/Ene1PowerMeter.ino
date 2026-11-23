@@ -876,8 +876,11 @@ void setup() {
   delay(resumed ? 500 : 1500);
 
   restartTimer(resumeElapsedMs);
+  // 最新の積算を読んで、すぐに EEPROM へ保存し始める (起動直後に電源が落ちても、
+  // リセット前の保存まで戻らないように)
+  inaMeasure(meas);
   persistSave(millis());
-  lastEeSaveMs = millis();
+  lastEeSaveMs = millis() - EE_SAVE_MS;
 }
 
 void loop() {
