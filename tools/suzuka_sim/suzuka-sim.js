@@ -155,6 +155,7 @@
     brakeDecel: 2.5,       // カーブ手前のブレーキ [m/s^2]
     maxCoastKmh: 85,       // 下りで惰性で出してよい速さ
     holdOnClimb: true,     // 上りでも速さを保とうとする
+    coastBelowGrade: null, // この勾配より急な下り (例 -0.01 = -1%) ではアクセルを戻して惰性で走る (null = 戻さない)
     // 大会
     attacks: 3,            // タイムアタックの回数
     flyingStartKmh: 0,     // スタートラインを通るときの速さ (0 = 止まった状態から)
@@ -238,7 +239,7 @@
     const p = Object.assign({}, DEFAULTS, params || {});
     const bat = battery(p);
     const rec = { t: [], d: [], v: [], elev: [], i: [], volt: [], q: [], section: [], heat: [], im: [] };
-    const attacks = [], events = [];
+    const attacks = [], events = [], brakeBySection = {};
     const loss = { aero: 0, roll: 0, brake: 0, battery: 0, motor: 0, chain: 0, ctrl: 0, climb: 0 };
     let t = 0, usedAh = 0, dnf = null, heat = 0, tripped = false, trips = 0;
     const dt = p.dt;
@@ -284,6 +285,7 @@
           else if (v > target + 0.05) fWant = 0;            // 下りでついた速さは、惰性で目標まで落とす
           else fWant = fRes;                                // 速さを保つ
           if (!p.holdOnClimb && grade > 0.005) fWant = Math.min(fWant, fRoll + fAero);
+          if (p.coastBelowGrade !== null && grade < p.coastBelowGrade) fWant = 0;
           fWant = Math.max(0, fWant);
         }
         const dr = fWant > 0 ? drive(fWant, v, usedAh, bat, p) : { force: 0, ib: 0, vb: bat.ocv(usedAh), im: 0 };
@@ -297,6 +299,7 @@
         const ds = (v + vNew) / 2 * dt;
         // エネルギーの行き先 [J]
         loss.aero += fAero * ds; loss.roll += fRoll * ds; loss.climb += fGrav * ds; loss.brake += brake * ds;
+        if (brake > 0) { const sec = sectionAt(d); brakeBySection[sec] = (brakeBySection[sec] || 0) + brake * ds / 3600; }
         loss.battery += i * i * bat.R * dt;
         const pBat = volt * i, pMotorIn = pBat * p.ctrlEff, pWheel = fMotor * (v + vNew) / 2;
         loss.ctrl += (pBat - pMotorIn) * dt;
@@ -320,7 +323,7 @@
     }
     const toWh = (j) => j / 3600;
     return {
-      params: p, rec, attacks, dnf, events, trips,
+      params: p, rec, attacks, dnf, events, trips, brakeBySection,
       usedMah: usedAh * 1000, capacityMah: bat.capAh * 1000,
       totalLapS: attacks.reduce((s, x) => s + (x.finished ? x.lapS : 0), 0),
       energyWh: {
