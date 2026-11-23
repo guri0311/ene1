@@ -1,0 +1,84 @@
+# Ene1PowerMeter のテストを push / PR のたびに自動で回す
+#   host-sim : スケッチを PC 用にコンパイルして動かす (速い)
+#   avr-emu  : 実機に書き込むのと同じ .hex を ATmega328P エミュレーターで動かす (約 8 分)
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# 同じブランチで新しく push されたら、古い実行は止める
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 動作を確認した組み合わせに固定する (ライブラリの更新で結果が変わらないように)
+  ARDUINO_CLI_VERSION: 1.1.1
+  ARDUINO_AVR_CORE: arduino:avr@1.8.8
+  SD_LIBRARY: SD@1.3.0
+
+jobs:
+  host-sim:
+    name: PC 上のシミュレーション
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: シミュレーション
+        run: bash test/host_sim/run_tests.sh
+      - name: シミュレーション (メモリ破壊・未定義動作の検査付き)
+        run: SIM_SANITIZE=1 bash test/host_sim/run_tests.sh
+
+  avr-emu:
+    name: 実機バイナリのエミュレーター
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: test/avr_emu/package-lock.json
+
+      - uses: arduino/setup-arduino-cli@v2
+        with:
+          version: ${{ env.ARDUINO_CLI_VERSION }}
+
+      - name: Arduino のコアとライブラリのキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-${{ env.ARDUINO_AVR_CORE }}-${{ env.SD_LIBRARY }}
+
+      - name: FAT イメージ用のツール (dosfstools, mtools)
+        run: sudo apt-get update -q && sudo apt-get install -y -q dosfstools mtools
+
+      - name: arduino:avr コアと SD ライブラリ
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install "$ARDUINO_AVR_CORE"
+          arduino-cli lib install "$SD_LIBRARY"
+
+      - name: ビルドとサイズ
+        run: |
+          arduino-cli compile --fqbn arduino:avr:nano --build-path "$RUNNER_TEMP/build" Ene1PowerMeter | tee "$RUNNER_TEMP/compile.txt"
+          {
+            echo '### ビルドのサイズ (Arduino Nano)'
+            echo '```'
+            grep -E 'Sketch uses|Global variables' "$RUNNER_TEMP/compile.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: npm の依存
+        working-directory: test/avr_emu
+        run: npm ci
+
+      - name: エミュレーターテスト
+        working-directory: test/avr_emu
+        run: node run.mjs
