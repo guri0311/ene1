@@ -123,7 +123,7 @@ arduino-cli compile --fqbn arduino:avr:nano Ene1PowerMeter
 
 ## テスト
 
-push と PR のたびに、GitHub Actions（[.github/workflows/test.yml](.github/workflows/test.yml)）が下の 2 つのテストを自動で回す。結果はリポジトリの Actions タブと PR の画面に出る。Arduino のコアと SD ライブラリのバージョンは workflow の中で固定している。
+push と PR のたびに、GitHub Actions（[.github/workflows/test.yml](.github/workflows/test.yml)）が下の 3 つのテストを自動で回す。結果はリポジトリの Actions タブと PR の画面に出る。Arduino のコアと SD ライブラリのバージョンは workflow の中で固定している。
 
 ### 実機バイナリのエミュレーターテスト（test/avr_emu）
 
