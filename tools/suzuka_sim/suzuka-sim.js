@@ -450,13 +450,21 @@
     return list.map((st) => Object.assign(st, { result: simulate(Object.assign({}, base, st.params)) }));
   }
 
-  // ログビューアや電力計と同じ形の CSV (電力計の記録と同じ列)
+  // 車輪が回った距離 [m] (速さの積分)。電力計の速度センサーが数える距離と同じもの。
+  // rec.d はコース上の位置なので、ゴール後に止まるまでの分を数えず、アタックごとにスタート位置へ戻る
+  function odometer(rec) {
+    const out = new Float64Array(rec.t.length);
+    for (let k = 1; k < rec.t.length; k++) out[k] = out[k - 1] + (rec.v[k] + rec.v[k - 1]) / 2 * (rec.t[k] - rec.t[k - 1]);
+    return out;
+  }
+
+  // ログビューアや電力計と同じ形の CSV (電力計の記録と同じ列。速さと距離は速度センサーの列)
   function toCsv(result, from, to) {
-    const r = result.rec;
-    const out = ['time_s,voltage_V,current_A,power_W,charge_mAh'];
+    const r = result.rec, odo = odometer(r);
+    const out = ['time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m'];
     for (let k = from || 0; k < (to || r.t.length); k++) {
       const i = r.i[k], v = r.volt[k];
-      out.push(`${r.t[k].toFixed(3)},${v.toFixed(3)},${i.toFixed(3)},${(v * i).toFixed(2)},${r.q[k].toFixed(2)}`);
+      out.push(`${r.t[k].toFixed(3)},${v.toFixed(3)},${i.toFixed(3)},${(v * i).toFixed(2)},${r.q[k].toFixed(2)},${(r.v[k] * 3.6).toFixed(2)},${odo[k].toFixed(1)}`);
     }
     return out.join('\n') + '\n';
   }
@@ -482,6 +490,6 @@
 
   return {
     LAP_M, ELEVATION, SECTIONS, CORNERS, MOTOR, DEFAULTS, elevationAt, gradeAt, sectionAt, speedLimit, cornerKmh,
-    motorAt24V, simulate, findCruise, forLapTime, maxCdAFor, optimizeBoost, strategies, toCsv, toDetailCsv,
+    motorAt24V, simulate, findCruise, forLapTime, maxCdAFor, optimizeBoost, strategies, odometer, toCsv, toDetailCsv,
   };
 });

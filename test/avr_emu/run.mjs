@@ -85,6 +85,20 @@ function fsck(img) {
   return { ok: r.status === 0 || issues.length === 0, text: issues.length ? issues.join(' / ') : 'OK', fsinfoOnly: r.status !== 0 && issues.length === 0 };
 }
 
+// 記録中のファイルは、SD ライブラリが新しいクラスタを FAT に確保してから、次の書き込みの確定 (1 秒ごと) で
+// ファイルサイズを書くまでの間、「クラスタの鎖がファイルサイズより長い」状態になる (確定済みの行はそのまま読める)。
+// 記録中に確かめるときは、その指摘だけなら確定を待ってもう一度確かめる。本当に壊れていれば待っても直らない
+const PENDING_SIZE = [/^\/LOG\d{3}\.CSV$/, /^\s*File size is \d+ bytes, cluster chain length is > \d+ bytes\.$/, /^\s*Truncating file to \d+ bytes\.$/];
+function fsckWhileRecording(b, maxMs = 3000) {
+  let fk = fsck(b.img), waited = 0;
+  while (!fk.ok && fk.text.split(' / ').every((l) => PENDING_SIZE.some((re) => re.test(l))) && waited < maxMs) {
+    b.run(250); waited += 250;
+    fk = fsck(b.img);
+  }
+  if (waited) console.log(`  [fsck] ファイルサイズの確定を ${waited}ms 待った (クラスタを確保した直後だった)`);
+  return fk;
+}
+
 // ---------------------------------------------------------------------------
 //  テストの道具
 // ---------------------------------------------------------------------------
@@ -117,6 +131,21 @@ function expectCharge(b, lo, hi) {
 }
 function expectSerial(b, re, what) {
   check(b.serial.some((l) => re.test(l)), `シリアルに ${what}`);
+}
+// USB シリアルに出た最後の CSV 行 (SD への記録と同じ形。1 秒ごとの flush を待たずに最新の値が見られる)
+function lastSerialRow(b) {
+  for (let k = b.serial.length - 1; k >= 0; k--) if (/^\d+\.\d{3},/.test(b.serial[k])) return b.serial[k].split(',').map(Number);
+  return [];
+}
+const serialSpeed = (b) => lastSerialRow(b)[5];
+const serialDist = (b) => lastSerialRow(b)[6];
+function expectSpeed(b, lo, hi) {
+  const v = serialSpeed(b);
+  check(v >= lo && v <= hi, `速さ ${v} km/h が ${lo}〜${hi} (シリアルの最後の行)`);
+}
+function expectDist(b, lo, hi) {
+  const d = serialDist(b);
+  check(d >= lo && d <= hi, `距離 ${d} m が ${lo}〜${hi} (磁石 ${b.pulses} 回、ノイズ ${b.spikes} 回)`);
 }
 function csvRows(img, name) {
   const t = sdRead(img, name);
@@ -172,7 +201,7 @@ function sawLcd(b, row, text, ms) {
 // ---------------------------------------------------------------------------
 //  シナリオ
 // ---------------------------------------------------------------------------
-scenario('起動・表示・記録 (24V、10A を 36 秒 → 100mAh)', () => {
+scenario('起動・表示・記録 (24V、10A・30km/h を 36 秒 → 100mAh・300m)', () => {
   const b = newBoard();
   b.run(1200);
   showLcd(b);
@@ -187,16 +216,24 @@ scenario('起動・表示・記録 (24V、10A を 36 秒 → 100mAh)', () => {
   expectSerial(b, /^SHUNT_CAL=4000$/, '"SHUNT_CAL=4000"');
   expectSerial(b, /^SD: LOG000.CSV/, '"SD: LOG000.CSV"');
   expectLcd(b, 0, 'V: 24.00V  I:  0.00A');
+  expectLcd(b, 2, 'TIME  00:0');
+  expectLcd(b, 2, ' 0.0km/h');
   expectLcd(b, 3, 'REC LOG000.CSV');
+  expectSerial(b, /^time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m$/, 'CSV の見出し行');
   b.ina.setCurrent(10);
+  b.setWheel(30);  // 車輪 1 周 1.571m に磁石 1 個 → 0.189 秒ごとにパルス (割り込みが動いている間も記録が乱れないか)
   b.run(36000);
   showLcd(b);
   expectLcd(b, 0, 'V: 24.00V  I: 10.00A');
   expectLcd(b, 1, 'P: 240W');
   expectCharge(b, 99, 101);
   expectLcd(b, 2, 'TIME  00:3');
+  expectLcd(b, 2, '30.0km/h');
+  expectSpeed(b, 29.98, 30.02);
+  // 30km/h x 36 秒 = 300m (パルスは 1.571m ごと)
+  expectDist(b, 297, 302);
   const rows = csvRows(b.img, 'LOG000.CSV');
-  check(rows && rows[0] === 'time_s,voltage_V,current_A,power_W,charge_mAh', `CSV の見出し行 (実際: "${rows && rows[0]}")`);
+  check(rows && rows[0] === 'time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m', `CSV の見出し行 (実際: "${rows && rows[0]}")`);
   const data = rows ? rows.slice(1) : [];
   const lo = Math.floor((36000 - FLUSH_MS) / LOG_MS) - 2, hi = Math.ceil(37200 / LOG_MS) + 2;
   check(data.length >= lo && data.length <= hi, `CSV のデータ行数 ${data.length} が ${lo}〜${hi} (${LOG_MS}ms ごと、flush は ${FLUSH_MS}ms ごと)`);
@@ -209,8 +246,8 @@ scenario('起動・表示・記録 (24V、10A を 36 秒 → 100mAh)', () => {
   const vals = new Set(data.slice(-20).map((r) => r.split(',')[4]));
   check(vals.size >= 15, `どの行も新しい測定値 (最後の 20 行で積算値が ${vals.size} 種類)`);
   const last = data[data.length - 1] || '';
-  check(/^\d+\.\d{3},24\.000,10\.000,240\.00,\d+\.\d{2}$/.test(last), `CSV の最終行の形式 (実際: "${last}")`);
-  const fk = fsck(b.img);
+  check(/^\d+\.\d{3},24\.000,10\.000,240\.00,\d+\.\d{2},(30\.0[0-2]|29\.9[89]),\d+\.\d$/.test(last), `CSV の最終行の形式 (実際: "${last}")`);
+  const fk = fsckWhileRecording(b);
   check(fk.ok, `FAT の整合性 (fsck.fat -n): ${fk.text}`);
   expectClean(b);
   const wdt = b.cpu.data[0x60];
@@ -316,7 +353,7 @@ scenario('INA228 だけ電源瞬断 → 再設定して積算を引き継ぐ', (
   b.ina.powerOn();
   b.run(18000);
   showLcd(b);
-  expectLcd(b, 2, 'INA!1');
+  expectLcd(b, 3, 'LOG000.CSV   INA!1');
   expectSerial(b, /INA228 re-configured, ok=1/, 'INA228 の再設定');
   expectCharge(b, q + 45, q + 56);
   expectClean(b);
@@ -346,9 +383,15 @@ scenario('LCD がノイズで化ける → 5 秒以内に戻る', () => {
   expectClean(b);
 });
 
-scenario('Nano だけリセット → 積算と時間を引き継ぐ / 電源を入れ直しても EEPROM から続ける / 長押しで 0', () => {
+scenario('Nano だけリセット → 積算・時間・距離を引き継ぐ / 電源を入れ直しても EEPROM から続ける / 長押しで 0', () => {
   const b = newBoard({ i: 10 });
-  b.run(40000);
+  b.setWheel(18);  // 5m/s
+  b.run(37000);
+  b.setWheel(0);   // 止まってからリセットする (距離がちょうど残るか見るため)
+  b.run(3000);
+  expectSpeed(b, 0, 0);
+  const d = serialDist(b);
+  check(d >= 180 && d <= 186, `37 秒で 185m 走った (${d} m)`);
   const q = lcdCharge(b);
   const t = b.lcd.row(2);
   b.resetMcu();
@@ -360,6 +403,7 @@ scenario('Nano だけリセット → 積算と時間を引き継ぐ / 電源を
   expectLcd(b, 2, 'TIME  00:4');
   console.log(`  [時間] リセット前 "${t.trim()}" → 後 "${b.lcd.row(2).trim()}"`);
   expectLcd(b, 3, 'REC LOG001.CSV');
+  check(serialDist(b) === d, `Nano のリセットのあとも距離を引き継ぐ (${d} → ${serialDist(b)} m)`);
   b.ina.setCurrent(0);
   const q2 = lcdCharge(b);
   b.powerCycle();
@@ -371,12 +415,15 @@ scenario('Nano だけリセット → 積算と時間を引き継ぐ / 電源を
   check(lcdCharge(b) >= q2 - 7 && lcdCharge(b) <= q2, `電源を入れ直しても積算を続ける (${q2} → ${lcdCharge(b)} mAh)`);
   check(/TIME  00:(39|4\d)/.test(b.lcd.row(2)), `経過時間も続ける (${b.lcd.row(2).trim()}、保存は 2 秒ごと)`);
   expectLcd(b, 3, 'REC LOG002.CSV');
+  check(serialDist(b) === d, `電源を入れ直しても EEPROM から距離を続ける (${d} → ${serialDist(b)} m)`);
   hold(b, 3500);
   b.run(1500);
+  check(serialDist(b) === 0, `長押しで距離も 0 (${serialDist(b)} m)`);
   b.powerCycle();
   b.run(3500);
   showLcd(b);
   expectCharge(b, 0, 1);
+  check(serialDist(b) === 0, `0 にしたあと電源を入れ直しても 0 (${serialDist(b)} m)`);
   expectLcd(b, 2, 'TIME  00:0');
   expectLcd(b, 3, 'REC LOG004.CSV');
   expectClean(b);
@@ -453,11 +500,14 @@ scenario('記録中に電源が落ちる → FAT は壊れず、flush 済みの�
   check(rows && rows.length - 1 >= 15 * PER_SEC, `flush 済みのデータ行が残っている (${rows ? rows.length - 1 : 0} 行)`);
 });
 
-scenario('長時間 (15A で 10 分 → 2500mAh) と RAM の実測', () => {
+scenario('長時間 (15A・30km/h で 10 分 → 2500mAh・5000m) と RAM の実測', () => {
   const b = newBoard({ i: 15 });
+  b.setWheel(30);
   b.run(600000);
   showLcd(b);
   expectCharge(b, 2495, 2505);
+  expectSpeed(b, 29.98, 30.02);
+  expectDist(b, 4990, 5003);
   check(/TIME  (09:5[6-9]|10:0)/.test(b.lcd.row(2)), `LCD 3行目が約 10 分 (起動中の約 2 秒を除く) (実際: "${b.lcd.row(2)}")`);
   const ram = b.serial.filter((l) => l.startsWith('# RAM min free:'));
   console.log(`  [RAM] ファームウェアの自己計測: ${ram[ram.length - 1] || '(なし)'}`);
@@ -467,7 +517,7 @@ scenario('長時間 (15A で 10 分 → 2500mAh) と RAM の実測', () => {
   console.log(`  [RAM] エミュレーターが測ったスタックとヒープの余裕 ${margin} バイト`);
   const rows = csvRows(b.img, 'LOG000.CSV');
   check(rows && rows.length >= 595 * PER_SEC, `10 分ぶんの記録 (${rows && rows.length} 行)`);
-  const fk = fsck(b.img);
+  const fk = fsckWhileRecording(b);
   check(fk.ok, `FAT の整合性 (fsck.fat -n): ${fk.text}`);
   expectClean(b);
 });
@@ -578,7 +628,7 @@ scenario('SD カードの書き込みが遅い (毎回 250ms のビジー) → �
   console.log(`  [遅いカード] ${data.length} 行 / 最長の間隔 ${sMax}ms / 間隔が ${LOG_MS * 1.5}ms を超えた所 ${late} か所`);
   check(data.length - 1 >= 33, `記録が続いている (${data.length} 行)`);
   check(sMax < 1000, `書き込みが遅くても 1 秒以上の抜けはない (最長 ${sMax}ms)`);
-  const fk = fsck(b.img);
+  const fk = fsckWhileRecording(b);
   check(fk.ok, `FAT の整合性: ${fk.text}`);
   expectClean(b);
 });
@@ -591,6 +641,37 @@ scenario('LCD が外れている → 記録は続く', () => {
   const rows = csvRows(b.img, 'LOG000.CSV');
   check(rows && rows.length - 1 >= 8 * PER_SEC, `LCD がなくても記録している (${rows ? rows.length - 1 : 0} 行)`);
   check(b.resets.watchdog === 0, 'ウォッチドッグによる再起動なし');
+});
+
+scenario('速度センサー: チャタリング・数 us のノイズは数えない、止まると 0、走り出すと 2 パルス目から', () => {
+  const b = newBoard({ i: 6 });
+  b.run(2500);
+  // 1 パルスに 4 回の跳ね返り (30us ごと) と、2us だけ LOW になるノイズを 1 秒に 200 回
+  b.setWheel(36, { bounce: 4, noiseHz: 200 });
+  b.run(15000);
+  showLcd(b);
+  expectLcd(b, 2, '36.0km/h');
+  expectSpeed(b, 35.97, 36.03);
+  // 36km/h = 10m/s で 15 秒 → 150m
+  expectDist(b, 147, 152);
+  check(b.spikes > 2500, `ノイズを ${b.spikes} 回入れた`);
+  b.setWheel(0, { bounce: 0, noiseHz: 0 });
+  b.run(600);
+  const slowing = serialSpeed(b);
+  check(slowing > 0 && slowing < 30, `止まりかけ (次のパルスが来ない) の間は、遅れから出した速さ ${slowing} km/h を出す`);
+  b.run(2000);
+  showLcd(b);
+  expectSpeed(b, 0, 0);
+  expectLcd(b, 2, ' 0.0km/h');
+  const d = serialDist(b);
+  b.setWheel(20);
+  b.run(150);
+  expectSpeed(b, 0, 0);
+  b.run(1000);
+  expectSpeed(b, 19.97, 20.03);
+  check(serialDist(b) > d, `走り出すと距離が増える (${d} → ${serialDist(b)} m)`);
+  expectLcd(b, 0, 'V: 24.00V  I:  6.00A');
+  expectClean(b);
 });
 
 // ---------------------------------------------------------------------------

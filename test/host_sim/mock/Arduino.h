@@ -27,6 +27,17 @@ inline void pinMode(uint8_t, uint8_t) {}
 inline int digitalRead(uint8_t pin) { return simDigitalRead(pin); }
 inline void digitalWrite(uint8_t, uint8_t) {}
 
+// ---- 外部割り込み (sim.cpp で実装。速度センサーの D3 = INT1 の立ち下がりを模擬する) ----
+#define CHANGE 1
+#define FALLING 2
+#define RISING 3
+inline int digitalPinToInterrupt(uint8_t pin) { return pin == 2 ? 0 : pin == 3 ? 1 : -1; }
+void simAttachInterrupt(int num, void (*isr)(), int mode);
+void simInterrupts(bool enable);
+inline void attachInterrupt(int num, void (*isr)(), int mode) { simAttachInterrupt(num, isr, mode); }
+inline void noInterrupts() { simInterrupts(false); }
+inline void interrupts() { simInterrupts(true); }
+
 // ---- PROGMEM / F() ----
 class __FlashStringHelper;
 #define F(s) (reinterpret_cast<const __FlashStringHelper *>(s))

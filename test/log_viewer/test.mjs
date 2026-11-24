@@ -28,7 +28,8 @@ check(names.join(' ') === 'LOG000.CSV LOG001.CSV LOG002.CSV', `ファイルは L
 // 読み込む順番がばらばらでも、ファイル番号で並べ直すことを確かめるため逆順で渡す
 const files = names.reverse().map((n) => C.parseCsv(fs.readFileSync(path.join(sdDir, n), 'utf8'), n));
 for (const f of files) {
-  check(f.headerOk, `${f.name}: 見出し行が ${C.HEADER.join(',')}`);
+  check(f.headerOk, `${f.name}: 見出し行が ${C.HEADER.concat(C.SPEED_HEADER).join(',')}`);
+  check(f.s && f.d && f.s.length === f.t.length, `${f.name}: 速さと距離の列も読めた`);
   check(f.skipped === 0, `${f.name}: 読めない行なし (${f.skipped} 行)`);
   const dt = [];
   for (let k = 1; k < f.t.length; k++) dt.push(f.t[k] - f.t[k - 1]);
@@ -63,17 +64,32 @@ check(near(s0.minV, 24, 0.01) && near(s0.maxV, 24, 0.01), `電圧 ${f2(s0.minV)}
 check(s0.joins === 1, `範囲内の継ぎ目 1 か所 (実際: ${s0.joins})`);
 check(s0.smooth > 1.0 && s0.smooth < 1.5, `電流のばらつき (2 乗平均 / 平均) ${f2(s0.smooth)} は 1 より大きい`);
 
+console.log('\n== 3b. 1 つ目の走行の速さと距離 (Nano のリセットをまたいでも距離は続く)');
+// 30km/h×120s + 36km/h×5s + 18km/h×60s + 27km/h×60s = 1000+50+300+450 = 1800m
+check(s0.hasSpeed, '速度センサーの列がある');
+check(near(s0.distM, 1800, 1800 * 0.01), `距離 ${f2(s0.distM)} m ≒ 1800 m (±1%)`);
+check(near(s0.maxKmh, 36, 0.05), `最高速 ${f2(s0.maxKmh)} km/h ≒ 36`);
+check(near(s0.avgKmh, 1800 / 248.5 * 3.6, 0.3), `平均速度 ${f2(s0.avgKmh)} km/h ≒ ${f2(1800 / 248.5 * 3.6)}`);
+check(near(s0.whPerKm, s0.Wh / (s0.distM / 1000), 0.05), `電費 ${f2(s0.whPerKm)} Wh/km = 電力量 ÷ 距離`);
+check(near(s0.mAhPerKm, s0.mAh / (s0.distM / 1000), 0.5), `${f2(s0.mAhPerKm)} mAh/km = 使用量 ÷ 距離`);
+const jd = r0.joins[0].index;
+check(r0.d[jd] >= r0.d[jd - 1] && r0.d[jd] - r0.d[jd - 1] < 3, `Nano のリセットの前後で距離が続く (${f2(r0.d[jd - 1])} → ${f2(r0.d[jd])} m)`);
+
 console.log('\n== 4. 範囲を指定した集計 (10A 一定の区間)');
 const a = C.lowerBound(r0.t, 20), b = C.lowerBound(r0.t, 110);
 const sr = C.stats(r0, a, b);
 check(near(sr.avgA, 10, 0.05), `20〜110 秒の平均電流 ${f2(sr.avgA)} A ≒ 10 A`);
 check(near(sr.mAh, 250, 2), `20〜110 秒の使用量 ${f2(sr.mAh)} mAh ≒ 250 mAh`);
 check(near(sr.smooth, 1, 0.01), `一定の電流ならばらつき ${f2(sr.smooth)} ≒ 1.00`);
+check(near(sr.avgKmh, 30, 0.3) && near(sr.maxKmh, 30, 0.05), `20〜110 秒の平均 ${f2(sr.avgKmh)} km/h・最高 ${f2(sr.maxKmh)} km/h ≒ 30`);
+check(near(sr.distM, 750, 3), `20〜110 秒の距離 ${f2(sr.distM)} m ≒ 750 m`);
 
 console.log('\n== 5. 2 つ目の走行 (積算リセットのあと)');
 const s1 = C.stats(r1);
 check(near(s1.avgA, 4, 0.1), `平均電流 ${f2(s1.avgA)} A ≒ 4 A`);
 check(near(s1.mAh, 4 * s1.duration / 3.6, 2), `使用量 ${f2(s1.mAh)} mAh ≒ 4A × ${f2(s1.duration)} 秒`);
+check(r1.d[0] < 1, `積算リセットで距離も 0 から (先頭 ${f2(r1.d[0])} m)`);
+check(near(s1.distM, 200, 4), `距離 ${f2(s1.distM)} m ≒ 24km/h × 30 秒 = 200 m`);
 
 console.log('\n== 6. 電流の分布 (時間の重み付き)');
 const h = C.histogram(r0, undefined, undefined, 1);
@@ -100,6 +116,16 @@ const fw = C.parseCsv('time_s,voltage_V,current_A\n1,2,3\n', 'x.csv');
 check(!fw.headerOk, '見出しの列が違うファイルは headerOk = false');
 const fr = C.parseCsv('time_s,voltage_V,current_A,power_W,charge_mAh\r\n1.000,24.000,1.000,24.00,0.30\r\n', 'LOG010.CSV');
 check(fr.t.length === 1 && fr.skipped === 0, 'Windows の改行 (CRLF) でも読める');
+const fs7 = C.parseCsv('time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m\n0.050,24.000,1.000,24.00,0.01,30.00,0.0\n0.100,24.000,1.000,24.00,0.03,30.00,1.6\n0.150,24.000,1.000,24.00,0.04', 'LOG011.CSV');
+check(fs7.headerOk && fs7.t.length === 2 && fs7.skipped === 1 && fs7.s[1] === 30 && fs7.d[1] === 1.6, '速さ・距離の列がある CSV: 電源断で列が足りない最後の行は飛ばす');
+
+console.log('\n== 8b. 速度センサーに対応する前の CSV (5 列) も読める');
+const old = C.parseCsv('time_s,voltage_V,current_A,power_W,charge_mAh\n0.050,24.000,1.000,24.00,0.01\n0.100,24.000,1.000,24.00,0.03\n', 'LOG020.CSV');
+check(old.headerOk && old.t.length === 2 && old.s === null && old.d === null, '5 列の CSV は速さ・距離なし (s, d が null)');
+const so = C.stats(C.buildRuns([old])[0]);
+check(!so.hasSpeed && Number.isNaN(so.distM) && Number.isNaN(so.whPerKm) && near(so.mAh, 0.02, 1e-9), '5 列の CSV の集計: 距離・電費は NaN、ほかは今までどおり');
+const mixed = C.buildRuns([old, C.parseCsv('time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m\n0.150,24.000,1.000,24.00,0.04,30.00,0.0\n', 'LOG021.CSV')]);
+check(mixed.length === 1 && mixed[0].s === null && mixed[0].t.length === 3, '5 列と 7 列のファイルをつないだ走行は、速さ・距離なしで扱う');
 
 console.log('\n== 9. 描画用の間引き (2 時間分 = 14 万行)');
 const N = 144000;

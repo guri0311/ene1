@@ -160,6 +160,7 @@ h2 { margin: 2px 0 0; font: italic 700 22px/1.1 var(--f-display); letter-spacing
 /* ---- 数字の列 ---- */
 .readout { display: flex; flex-wrap: wrap; border-top: 1px solid var(--ring); }
 .readout > .ro { flex: 1 1 128px; }
+.readout.more > .ro { flex-basis: 200px; }  /* 速さ・電費もあるときは 4 つずつ 2 段に */
 .ro { padding: 11px 16px 12px; border-right: 1px solid var(--ring); border-bottom: 1px solid var(--ring); min-width: 0; }
 .ro .k { font: 500 10.5px/1.2 var(--f-mono); letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase; }
 .ro .v { font: italic 800 30px/1.05 var(--f-display); margin-top: 5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -369,7 +370,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       <div class="tablewrap">
         <table>
           <thead><tr>
-            <th>比較</th><th>走行</th><th>時間</th><th>使用量 mAh</th><th>Wh</th><th>平均 A</th><th>最大 A</th><th>最低 V</th><th title="電流の 2 乗平均 ÷ 平均">ばらつき</th><th>OVER</th><th>記録なし</th><th>ファイル</th>
+            <th>比較</th><th>走行</th><th>時間</th><th>使用量 mAh</th><th>Wh</th><th>距離 km</th><th title="電力量 ÷ 距離">Wh/km</th><th>平均 A</th><th>最大 A</th><th>最低 V</th><th title="電流の 2 乗平均 ÷ 平均">ばらつき</th><th>OVER</th><th>記録なし</th><th>ファイル</th>
           </tr></thead>
           <tbody id="runRows"></tbody>
         </table>
@@ -382,6 +383,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
         <li>Wh・平均電力・ばらつきは行の間をつないで計算し、記録のない区間（0.5 秒以上の抜け）は含めない。</li>
         <li>ばらつき = 電流の 2 乗平均 ÷ 平均電流。1.00 なら一定の電流。電池の中の損失（I²R）は、同じ量を一定の電流で使ったときの「ばらつき²」倍になる。</li>
         <li>OVER = 電流が 20A（ファームウェアの MAX_CURRENT_A）に張り付いていた時間。その間は実際より少なく数えている。</li>
+        <li>速さ・距離は速度センサーの列（speed_kmh・distance_m）がある記録だけ。電費 Wh/km = 電力量 ÷ 距離（記録のない区間は電力量と同じく除く）。距離はファームウェアの WHEEL_CIRCUMFERENCE_M（車輪 1 周の距離）で決まるので、実測した値を入れておく。</li>
       </ul>
     </footer>
   </div>
@@ -503,7 +505,13 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     const files = [];
     let rows = [], q = 0, cur = 0, logNo = o.firstLog, t = 0;
     const dt = 0.05, end = o.minutes * 60;
-    const header = 'time_s,voltage_V,current_A,power_W,charge_mAh';
+    const header = 'time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m';
+    // 速さ [km/h] の目安: 電流の区間ごとに、加速・巡航・下り・上り・カーブの手前
+    const spdAt = (s) => {
+      const x = s % lap;
+      return x < 5 ? 26 : x < 30 ? 33 : x < 42 ? 36 : x < 48 ? 27 : x < 70 ? 31 : x < 80 ? 22 : 32;
+    };
+    let spd = 0, dist = 0;
     const flush = () => { files.push({ name: `LOG${String(logNo).padStart(3, '0')}.CSV`, text: header + '\n' + rows.join('\n') + '\n' }); rows = []; logNo++; };
     let resetDone = !o.resetAt;
     while (t < end) {
@@ -512,14 +520,16 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       cur += (target - cur) * 0.25;
       const meas = Math.max(-0.5, Math.min(cur, MAX_A));
       q += cur * dt / 3.6;
+      spd += (spdAt(t) * (0.97 + o.cruise * 0.005) - spd) * 0.04 + (rnd() - 0.5) * 0.1;
+      dist += spd / 3.6 * dt;
       const v = 25.4 - 0.0009 * q - 0.085 * cur + (rnd() - 0.5) * 0.01;
       if (!resetDone && t >= o.resetAt) {
         flush();
         const t2 = t + 3;
-        while (t < t2) { t += dt; q += cur * dt / 3.6; }
+        while (t < t2) { t += dt; q += cur * dt / 3.6; dist += spd / 3.6 * dt; }
         resetDone = true;
       }
-      rows.push(`${t.toFixed(3)},${v.toFixed(3)},${meas.toFixed(3)},${(v * meas).toFixed(2)},${q.toFixed(2)}`);
+      rows.push(`${t.toFixed(3)},${v.toFixed(3)},${meas.toFixed(3)},${(v * meas).toFixed(2)},${q.toFixed(2)},${spd.toFixed(2)},${dist.toFixed(1)}`);
     }
     flush();
     return files;
@@ -527,7 +537,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
 
   // ---------------------------------------------------------------------------
   //  鈴鹿サーキットのシミュレーション (tools/suzuka_sim/suzuka-sim.js の物理モデル)
-  //  走り方を 4 つ計算し、電力計と同じ形の CSV にしてから読む。速さ・標高・ブレーカーの熱も付ける
+  //  走り方を 4 つ計算し、電力計と同じ形の CSV (速さ・距離の列も) にしてから読む。標高とブレーカーの熱も付ける
   const SIM = window.SuzukaSim;
   if (SIM) $('suzuka').hidden = false;
   function loadSuzuka() {
@@ -543,7 +553,6 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
         r.key = 'sim:' + st.key; r.index = n; r.label = st.name;
         r.files = [`鈴鹿シミュ · ${st.note}`];
         r.ext = {
-          speed: Float64Array.from(rec.v, (x) => x * 3.6),
           elev: Float64Array.from(rec.elev),
           heat: Float64Array.from(rec.heat, (x) => x * 100),
         };
@@ -619,6 +628,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       return `<tr data-k="${k}" class="${k === state.active ? 'active' : ''}">
         <td><input type="checkbox" data-cmp="${esc(r.key)}" ${cmp ? 'checked' : ''} ${full ? 'disabled' : ''} aria-label="比較に入れる"></td>
         <td>${sw}${esc(r.label)}</td><td>${C.fmtTime(s.duration)}</td><td>${s.mAh.toFixed(0)}</td><td>${s.Wh.toFixed(2)}</td>
+        <td>${s.hasSpeed ? (s.distM / 1000).toFixed(2) : '—'}</td><td>${fmt(s.whPerKm, 1)}</td>
         <td>${s.avgA.toFixed(2)}</td><td>${s.peakA.toFixed(1)}</td><td>${s.minV.toFixed(2)}</td><td>${fmt(s.smooth, 2)}</td>
         <td>${s.overS > 0 ? s.overS.toFixed(1) + 's' : '—'}</td><td>${s.gapS > 0 ? s.gapS.toFixed(1) + 's' : '—'}</td>
         <td style="color:var(--muted)">${esc(r.files.join(' + '))}</td></tr>`;
@@ -650,6 +660,10 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     out.push(ro('最低電圧', s.minV.toFixed(2), 'V', `最高 ${s.maxV.toFixed(2)} V`));
     out.push(ro('電力量', s.Wh.toFixed(2), 'Wh', s.gapS > 0 ? `記録なし ${s.gapS.toFixed(1)} 秒は含まない` : '50ms ごとの記録から'));
     out.push(ro('ばらつき', fmt(s.smooth, 2), '', Number.isFinite(s.smooth) ? `損失は一定電流の ${(s.smooth * s.smooth).toFixed(2)} 倍` : ''));
+    if (s.hasSpeed) {
+      out.push(ro('距離', (s.distM / 1000).toFixed(2), 'km', `平均 ${fmt(s.avgKmh, 1)} km/h · 最高 ${fmt(s.maxKmh, 1)} km/h`));
+      out.push(ro('電費', fmt(s.whPerKm, 1), 'Wh/km', Number.isFinite(s.mAhPerKm) ? `${s.mAhPerKm.toFixed(0)} mAh/km` : '走った距離が短い'));
+    }
     const chips = [];
     if (s.overS > 0) chips.push(`<span class="chip warn">OVER ${s.overS.toFixed(1)} 秒（20A で頭打ち）</span>`);
     if (s.joins > 0) chips.push(`<span class="chip">Nano リセット ${s.joins} 回</span>`);
@@ -657,6 +671,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     if (!chips.length) chips.push('<span class="chip">異常なし</span>');
     out.push(`<div class="ro status"><div class="k">記録の状態</div>${chips.join('')}</div>`);
     $('readout').innerHTML = out.join('');
+    $('readout').classList.toggle('more', s.hasSpeed);
   }
   $('clearSel').addEventListener('click', () => { state.sel = null; renderScoped(); });
   $('zoomIn').addEventListener('click', () => { if (state.sel) { state.view = state.sel; state.sel = null; renderScoped(); } });
@@ -671,8 +686,9 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     { key: 'p', title: '電力', unit: 'W', digits: 0, zero: true, color: 'var(--trace-p)', h: 104 },
     { key: 'q', title: '積算', unit: 'mAh', digits: 1, zero: true, color: 'var(--trace-q)', h: 120 },
     { key: 'pace', title: '予算との差', unit: 'mAh', digits: 0, zero: true, color: 'var(--ink-2)', h: 110 },
+    // 速度センサーの列がある記録だけ
+    { key: 's', title: '速さ', unit: 'km/h', digits: 1, zero: true, color: 'var(--s4)', h: 104, opt: true },
     // ここから下はシミュレーションのときだけ (電力計の記録にはない)
-    { key: 'speed', title: '速さ', unit: 'km/h', digits: 1, zero: true, color: 'var(--s4)', h: 104, ext: true },
     { key: 'elev', title: '標高', unit: 'm', digits: 1, zero: true, color: 'var(--muted)', h: 84, ext: true },
     { key: 'heat', title: 'ブレーカーの熱', unit: '%', digits: 0, zero: true, color: 'var(--critical)', h: 84, ext: true },
   ];
@@ -707,7 +723,7 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       if (last && X(a) - X(last.t1) < 1) last.t1 = b; else overs.push({ t0: a, t1: b });
     }
     geo = { strips: [], X, tA, tB, pw, W, r };
-    const strips = STRIPS.filter((c) => (c.key !== 'pace' || pace) && (!c.ext || (r.ext && r.ext[c.key])));
+    const strips = STRIPS.filter((c) => (c.key !== 'pace' || pace) && (!c.opt || r[c.key]) && (!c.ext || (r.ext && r.ext[c.key])));
     let html = '';
     strips.forEach((c, n) => {
       const last = n === strips.length - 1;
@@ -856,7 +872,8 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
       const r = run(), pace = paceSeries(r);
       const rows = [['電流', `${r.i[k].toFixed(2)} A`], ['電圧', `${r.v[k].toFixed(3)} V`], ['電力', `${r.p[k].toFixed(0)} W`], ['積算', `${r.q[k].toFixed(1)} mAh`]];
       if (pace) rows.push(['予算との差', `${pace[k] > 0 ? '+' : ''}${pace[k].toFixed(0)} mAh`]);
-      if (r.ext) rows.push(['速さ', `${r.ext.speed[k].toFixed(1)} km/h`], ['区間', esc(r.sim.rec.section[k])]);
+      if (r.s) rows.push(['速さ', `${r.s[k].toFixed(1)} km/h`], ['距離', `${((r.d[k] - r.d[0]) / 1000).toFixed(3)} km`]);
+      if (r.sim) rows.push(['区間', esc(r.sim.rec.section[k])]);
       if (r.i[k] >= C.DEFAULT_OVER_A) rows.push(['⚠', 'OVER（20A で頭打ち）']);
       tip.innerHTML = `<div class="t">${C.fmtTime(r.t[k] - r.t[0])} · t=${r.t[k].toFixed(2)}s</div><table>${rows.map((x) => `<tr><td>${x[0]}</td><td>${x[1]}</td></tr>`).join('')}</table>`;
       tip.style.display = 'block';
@@ -1025,7 +1042,10 @@ footer ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
     } else {
       cells.push(ro('経過', C.fmtTime(r.t[k] - r.t[0]), '', '予算を入れると差も出る'));
     }
-    if (r.ext) cells.unshift(ro('速さ · シミュレーション', r.ext.speed[k].toFixed(1), 'km/h', `${esc(r.sim.rec.section[k])} · 標高 ${r.ext.elev[k].toFixed(0)} m`, 'wide'));
+    if (r.s) {
+      const where = r.sim ? `${esc(r.sim.rec.section[k])} · 標高 ${r.ext.elev[k].toFixed(0)} m · ` : '';
+      cells.unshift(ro(r.sim ? '速さ · シミュレーション' : '速さ', r.s[k].toFixed(1), 'km/h', `${where}距離 ${((r.d[k] - r.d[0]) / 1000).toFixed(2)} km`, 'wide'));
+    }
     $('live').innerHTML = cells.join('');
   }
 
