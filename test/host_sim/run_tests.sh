@@ -478,6 +478,12 @@ run 150
 expect_speed 0 0
 run 1000
 expect_speed 19.95 20.05
+say "19e. 下りの高速 (95km/h) でもパルスを捨てずに正しく測れる (SPEED_MAX_KMH=110)"
+wheel 95
+run 1000
+expect_speed 94.8 95.2
+lcd
+expect_lcd 2 "95.0km/h"
 expect_clean
 EOF
 
