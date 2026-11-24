@@ -85,7 +85,8 @@ if (opt.firmware) {
   const lines = [`v ${r.rec.volt[0].toFixed(3)}`, 'i 0', 'setup', 'mark'];
   let lastAttack = 0;   // 各アタックのゴールの直後に LCD を表示する
   for (let k = 1; k < r.rec.t.length; k++) {
-    lines.push(`v ${r.rec.volt[k].toFixed(3)}`, `i ${r.rec.i[k].toFixed(3)}`, `run_to ${Math.round(r.rec.t[k] * 1000)}`);
+    // 速さは車輪のパルスにして速度センサーの入力 (D3) に流す
+    lines.push(`v ${r.rec.volt[k].toFixed(3)}`, `i ${r.rec.i[k].toFixed(3)}`, `wheel ${(r.rec.v[k] * 3.6).toFixed(3)}`, `run_to ${Math.round(r.rec.t[k] * 1000)}`);
     const attackNow = Math.floor(r.rec.d[k] / S.LAP_M + 1e-9);
     if (attackNow > lastAttack && attackNow <= r.attacks.length) { lines.push(`say "${attackNow} 回目のゴール"`, 'lcd'); lastAttack = attackNow; }
   }
@@ -96,7 +97,8 @@ if (opt.firmware) {
   console.log(shown.join('\n'));
   const logs = fs.readdirSync(sd).filter((n) => /\.CSV$/i.test(n));
   const last = fs.readFileSync(path.join(sd, logs[logs.length - 1]), 'utf8').trim().split('\n').pop().split(',');
-  console.log(`\n電力計の記録: ${logs.join(', ')}、最後の行の積算 ${Number(last[4]).toFixed(1)} mAh (物理モデル ${r.usedMah.toFixed(1)} mAh)`);
+  console.log(`\n電力計の記録: ${logs.join(', ')}、最後の行の積算 ${Number(last[4]).toFixed(1)} mAh (物理モデル ${r.usedMah.toFixed(1)} mAh)、` +
+    `距離 ${(Number(last[6]) / 1000).toFixed(3)} km (物理モデルの速さを積分 ${(S.odometer(r.rec).at(-1) / 1000).toFixed(3)} km)`);
   console.log(`CSV: ${path.relative(process.cwd(), sd)}/`);
   fs.rmSync(work, { recursive: true, force: true });
   if (res.status !== 0) { console.error(res.stdout.slice(-2000)); process.exit(1); }

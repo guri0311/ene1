@@ -19,6 +19,11 @@ sed -e 's/MAX_CURRENT_A   = 20.0f/MAX_CURRENT_A   = 81.92f/' -e 's/INA_ADCRANGE 
 grep -q "MAX_CURRENT_A   = 81.92f" "$WORK/v8192/sketch.ino" && grep -q "INA_ADCRANGE = 0;" "$WORK/v8192/sketch.ino" \
   || { echo "81.92A 版の生成に失敗"; exit 1; }
 g++ "${CXX_FLAGS[@]}" -DSKETCH_PATH="\"$WORK/v8192/sketch.ino\"" -o "$WORK/sim8192" "$HERE/sim.cpp" || exit 1
+# 車輪に磁石を 4 個付けた版 (速さは車輪 1 周ぶんのパルスから出す)
+mkdir -p "$WORK/mag4"
+sed -e 's/SPEED_MAGNETS   = 1;/SPEED_MAGNETS   = 4;/' "$HERE/../../Ene1PowerMeter/Ene1PowerMeter.ino" > "$WORK/mag4/sketch.ino"
+grep -q "SPEED_MAGNETS   = 4;" "$WORK/mag4/sketch.ino" || { echo "磁石 4 個の版の生成に失敗"; exit 1; }
+g++ "${CXX_FLAGS[@]}" -DSKETCH_PATH="\"$WORK/mag4/sketch.ino\"" -o "$WORK/simmag4" "$HERE/sim.cpp" || exit 1
 
 FAILED=0
 # boot <名前> <cold|warm> : 標準入力のシナリオを 1 回の起動として実行
@@ -38,7 +43,9 @@ expect_lcd 1 "INA228 OK"
 expect_lcd 3 "LOG000.CSV"
 run 2000
 expect_lcd 0 "V: 24.00V  I:  0.00A"
+expect_lcd 2 "TIME  00:02  0.0km/h"
 expect_lcd 3 "REC LOG000.CSV"
+expect_first LOG000.CSV "time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m"
 i 10
 run 360000
 lcd
@@ -47,6 +54,8 @@ expect_lcd 1 "P: 240W  Q:  1000mAh"
 expect_lcd 2 "TIME  06:02"
 expect_charge 998 1002
 expect_last LOG000.CSV ",24.000,10.000,240.00,"
+# 速度センサーをつないでいない (車輪が回らない) ときは、速さも距離も 0
+expect_last LOG000.CSV ",0.00,0.0"
 # 50ms ごと (1 秒に 20 行) に 362 秒 → 見出しを含めて約 7241 行。
 # 1 秒ごとに flush するので、最後の最大 20 行はまだカードに書かれていないことがある
 expect_lines LOG000.CSV 7215 7245
@@ -141,7 +150,7 @@ expect_charge 100 106
 ina glitch
 run 36000
 lcd
-expect_lcd 2 "INA!1"
+expect_lcd 3 "LOG000.CSV   INA!1"
 expect_charge 198 210
 expect_clean
 EOF
@@ -351,9 +360,10 @@ run 7200000
 lcd
 expect_charge 29990 30020
 expect_lcd 1 "Q: 300"
-expect_lcd 2 "TIME  120:0"
-# 2 秒ごとに 64 か所へ順番に書くので、2 時間で 1 バイトあたり約 57 回
-expect_ee_wear 60
+expect_lcd 2 "TIME 120:0"
+expect_lcd 2 "  0.0km/h"
+# 2 秒ごとに 50 か所へ順番に書くので、2 時間で 1 バイトあたり約 72 回
+expect_ee_wear 75
 expect_clean
 EOF
 
@@ -401,7 +411,7 @@ run 36000
 ina glitch
 run 36000
 lcd
-expect_lcd 2 "INA!1"
+expect_lcd 3 "INA!1"
 expect_charge 270 290
 expect_clean
 EOF
@@ -413,6 +423,176 @@ v 24
 setup
 run 2000
 expect_lcd 3 "REC LOG450.CSV"
+expect_clean
+EOF
+
+# ---------------------------------------------------------------------------
+#  速度センサー (車輪 1 周 1.571m、磁石 1 個。30km/h なら 0.189 秒ごとにパルス)
+# ---------------------------------------------------------------------------
+boot speed cold <<'EOF'
+say "19. 速度センサー: 30km/h で 60 秒 → 表示 30.0km/h、距離 500m、CSV にも記録"
+v 24
+i 8
+setup
+run 2000
+wheel 30
+run 60000
+lcd
+expect_lcd 2 "TIME  01:0"
+expect_lcd 2 "30.0km/h"
+expect_speed 29.95 30.05
+# 30km/h x 60 秒 = 500m (パルスは 1.571m ごと)
+expect_dist 497 503
+expect_last_col LOG000.CSV 5 29.95 30.05
+expect_last_col LOG000.CSV 6 495 503
+expect_clean
+
+say "19b. 加速 (30 → 45km/h) と減速 (45 → 15km/h) に 1 秒以内でついていく"
+wheel 45
+run 1000
+expect_speed 44.9 45.1
+wheel 15
+run 1000
+expect_speed 14.9 15.1
+lcd
+expect_lcd 2 "15.0km/h"
+
+say "19c. 止まる → パルスが来なくなって 2 秒ほどで 0km/h。距離はそのまま"
+expect_dist 516 524
+wheel 0
+run 600
+# 減速中の扱い: 次のパルスが遅れている間は、その遅れから出した速さ (今の速さ以下) を出す
+expect_speed 0 12
+run 1800
+lcd
+expect_speed 0 0
+expect_lcd 2 " 0.0km/h"
+expect_dist 516 524
+expect_last_col LOG000.CSV 5 0 0
+run 5000
+expect_dist 516 524
+
+say "19d. また走り出す: 1 パルス目では速さを出さず、2 パルス目から正しい速さ"
+wheel 20
+run 150
+expect_speed 0 0
+run 1000
+expect_speed 19.95 20.05
+expect_clean
+EOF
+
+boot speednoise cold <<'EOF'
+say "20. チャタリング (1 パルスに 4 回の跳ね返り) と、数 us で消えるノイズ (1 秒に 50 回) は数えない"
+v 24
+i 6
+setup
+wheel_bounce 4
+wheel_noise 50
+wheel 36
+run 50000
+lcd
+expect_lcd 2 "36.0km/h"
+expect_speed 35.95 36.05
+# 36km/h = 10m/s で 50 秒 → 500m
+expect_dist 497 503
+expect_clean
+
+say "20b. 速度センサーの線が外れて止まったまま (パルスが来ない) → 速さ 0、ほかの表示と記録は続く"
+wheel_bounce 0
+wheel_noise 0
+wheel 0
+run 3000
+lcd
+expect_speed 0 0
+expect_lcd 0 "V: 24.00V  I:  6.00A"
+expect_lcd 3 "REC LOG000.CSV"
+EOF
+
+boot speedina cold <<'EOF'
+say "21. INA228 が読めない間も、速さは表示し続ける"
+v 24
+i 5
+setup
+wheel 25
+run 5000
+ina off
+run 3000
+lcd
+expect_lcd 0 "INA228 I2C ERROR"
+expect_lcd 2 "25.0km/h"
+ina on
+run 2000
+expect_lcd 0 "I:  5.00A"
+expect_clean
+EOF
+
+boot dist cold <<'EOF'
+say "22. 距離の引き継ぎ (前半): 36km/h で 60 秒 → 約 600m"
+v 24
+i 8
+setup
+wheel 36
+run 60000
+expect_dist 597 604
+EOF
+boot dist warm <<'EOF'
+say "22b. Nano だけリセット → 距離を引き継ぐ (止まっている間)"
+v 24
+i 0
+setup
+expect_lcd 1 "RESUMED (mAh KEPT)"
+run 2000
+# .noinit RAM への保存は 0.25 秒ごと (36km/h で 2.5m)
+expect_dist 596 604
+wheel 36
+run 10000
+expect_dist 696 704
+expect_last_col LOG001.CSV 6 692 704
+EOF
+boot dist cold <<'EOF'
+say "22c. 電源が全部落ちて戻る → EEPROM に保存した距離から続ける (保存は 2 秒ごと)"
+v 24
+i 0
+setup
+expect_lcd 1 "RESTORED (mAh KEPT)"
+run 2000
+# 最後の保存は最大 2 秒前 (36km/h で 20m) まで戻る
+expect_dist 676 704
+press 3500
+run 1000
+say "22d. 3 秒長押しで距離も 0"
+expect_dist 0 0
+wheel 18
+run 10000
+expect_dist 46 52
+EOF
+boot dist cold <<'EOF'
+say "22e. (22d の続き) 電源を入れ直す → 0 にしたあとの距離から続ける"
+v 24
+setup
+run 1000
+expect_dist 42 52
+EOF
+
+boot magnets4 cold simmag4 <<'EOF'
+say "23. 磁石 4 個 (間隔をわざとずらす): 車輪 1 周ぶんで平均するので、速さはずれない"
+v 24
+i 8
+wheel_uneven on
+setup
+wheel 30
+run 20000
+lcd
+expect_lcd 2 "30.0km/h"
+expect_speed 29.95 30.05
+# 30km/h x 20 秒 = 167m。パルスは 0.39m ごと
+expect_dist 164 169
+wheel 8
+run 3000
+expect_speed 7.95 8.05
+wheel 0
+run 1000
+expect_speed 0 0
 expect_clean
 EOF
 

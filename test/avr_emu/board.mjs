@@ -1,4 +1,4 @@
-// 仮想ボード: ATmega328P (avr8js) に INA228・LCD・SD カード・ボタン・USB シリアルをつなぐ
+// 仮想ボード: ATmega328P (avr8js) に INA228・LCD・SD カード・ボタン・速度センサー・USB シリアルをつなぐ
 import { createRequire } from 'module';
 import { I2CBus, INA228, RW1063, SdCard } from './devices.mjs';
 
@@ -45,6 +45,17 @@ export class Board {
     this.serial = [];
     this.serialLine = '';
     this.button = false;
+    // 速度センサー (D3): 車輪の磁石が来るたびに 1ms だけ LOW。チャタリングと数 us のノイズも作れる。
+    // 時刻はボードの通しのサイクル数で持つので、Nano がリセットされても車輪は回り続ける
+    this.wheel = { kmh: 0, circ: 1.571, magnets: 1, bounce: 0, noiseHz: 0 };
+    this.wheelArmed = false;
+    this.noiseArmed = false;
+    this.d3Pulse = false;      // 磁石による LOW
+    this.d3Spike = false;      // ノイズによる LOW
+    this.pulses = 0;
+    this.spikes = 0;
+    this.events = [];          // { cyc, fn } (時刻順)
+    this.nextEventCyc = Infinity;
     this.resets = { watchdog: 0, external: 0, power: 0 };
     this.minSp = 0xffff;
     this.maxWdtGapUs = 0;
@@ -52,6 +63,7 @@ export class Board {
   }
 
   get timeUs() { return ((this.baseCycles + (this.cpu ? this.cpu.cycles : 0)) * 1e6) / F_CPU; }
+  get cycles() { return this.baseCycles + (this.cpu ? this.cpu.cycles : 0); }
 
   // チップを組み立てる。sram を渡すとその内容を引き継ぐ (リセットでは SRAM は消えない)
   buildChip(sram, mcusr) {
@@ -98,6 +110,7 @@ export class Board {
     // ウォッチドッグでリセットされた直後は WDRF により WDE が強制的に有効 (16ms)
     if (mcusr & 0x08) { cpu.writeData(0x60, 0x18); cpu.writeData(0x60, 0x08); }
     this.applyButton();
+    this.applyD3();
   }
 
   noteWdr() {
@@ -123,6 +136,46 @@ export class Board {
   setButton(pressed) { this.button = pressed; this.applyButton(); }
   applyButton() { if (this.portD) this.portD.setPin(2, !this.button); }
 
+  // ---- 速度センサー ----
+  applyD3() { if (this.portD) this.portD.setPin(3, !(this.d3Pulse || this.d3Spike)); }
+  schedule(cyc, fn) {
+    let k = this.events.length;
+    while (k > 0 && this.events[k - 1].cyc > cyc) k--;
+    this.events.splice(k, 0, { cyc, fn });
+    this.nextEventCyc = this.events[0].cyc;
+  }
+  runEvents(now) {
+    while (this.events.length && this.events[0].cyc <= now) this.events.shift().fn();
+    this.nextEventCyc = this.events.length ? this.events[0].cyc : Infinity;
+  }
+  pulsePeriodCyc() { return Math.round((this.wheel.circ / this.wheel.magnets / (this.wheel.kmh / 3.6)) * F_CPU); }
+  // 車輪の速さ [km/h] と、チャタリングの回数 (bounce)・ノイズの回数 [1/s] (noiseHz) など
+  setWheel(kmh, opts = {}) {
+    Object.assign(this.wheel, opts, { kmh });
+    if (kmh > 0 && !this.wheelArmed) { this.wheelArmed = true; this.schedule(this.cycles + this.pulsePeriodCyc(), () => this.pulse()); }
+    if (this.wheel.noiseHz > 0 && !this.noiseArmed) { this.noiseArmed = true; this.schedule(this.cycles + F_CPU / this.wheel.noiseHz / 3, () => this.spike()); }
+  }
+  pulse() {
+    if (!(this.wheel.kmh > 0)) { this.wheelArmed = false; return; }
+    const now = this.cycles, us = F_CPU / 1e6;
+    this.pulses++;
+    this.d3Pulse = true; this.applyD3();
+    for (let b = 0; b < this.wheel.bounce; b++) {  // 30us ごとに HIGH と LOW を繰り返す
+      this.schedule(now + (60 * b + 30) * us, () => { this.d3Pulse = false; this.applyD3(); });
+      this.schedule(now + (60 * b + 60) * us, () => { this.d3Pulse = true; this.applyD3(); });
+    }
+    this.schedule(now + 1000 * us, () => { this.d3Pulse = false; this.applyD3(); });
+    this.schedule(now + this.pulsePeriodCyc(), () => this.pulse());
+  }
+  spike() {  // 2us だけ LOW になるノイズ
+    if (!(this.wheel.noiseHz > 0)) { this.noiseArmed = false; return; }
+    const now = this.cycles;
+    this.spikes++;
+    this.d3Spike = true; this.applyD3();
+    this.schedule(now + 2 * (F_CPU / 1e6), () => { this.d3Spike = false; this.applyD3(); });
+    this.schedule(now + Math.round(F_CPU / this.wheel.noiseHz), () => this.spike());
+  }
+
   onSerialByte(b) {
     if (b === 13) return;
     if (b === 10) {
@@ -140,6 +193,7 @@ export class Board {
       const cpu = this.cpu;
       avrInstruction(cpu);
       cpu.tick();
+      if (this.baseCycles + cpu.cycles >= this.nextEventCyc) this.runEvents(this.baseCycles + cpu.cycles);
       const sp = cpu.SP;
       if (sp < this.minSp) this.minSp = sp;
       if (this.pendingReset) {

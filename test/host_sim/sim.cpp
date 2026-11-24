@@ -1,6 +1,7 @@
 // Ene1PowerMeter を PC 上で動かす検証用シミュレーター
 //   - INA228 と RW1063 (LCD) をデータシートどおりにモデル化して I2C でつなぐ
 //   - SD カードは PC のディレクトリで代用
+//   - 速度センサーは、車輪の回転位置を時間とともに進め、磁石が来るたびに D3 の割り込みを起こす
 //   - 標準入力から手順 (シナリオ) を読み、期待どおりかを確かめる
 //
 // 使い方: sim <状態ファイル> <SDディレクトリ> < シナリオ
@@ -13,6 +14,7 @@
 #include "SPI.h"
 #include "avr/eeprom.h"
 #include <vector>
+#include <algorithm>
 #include <sstream>
 #include <iostream>
 #include <stdexcept>
@@ -52,7 +54,54 @@ static bool g_inSetup = false;
 static int g_fail = 0;
 struct HaltException {};
 
-int simDigitalRead(uint8_t pin) { return (pin == 2 && g_button) ? LOW : HIGH; }
+// ---------------------------------------------------------------------------
+//  速度センサー (車輪の磁石とホール IC) のモデル
+//    車輪の回転位置 [回転] を時間とともに進め、磁石の位置を通るたびに D3 を 1ms だけ LOW にして
+//    INT1 の割り込み (立ち下がり) を起こす。チャタリングと、数 us で消えるノイズも作れる
+// ---------------------------------------------------------------------------
+static void (*g_isr1)() = nullptr;     // attachInterrupt(1, ..., FALLING) で登録された関数
+static int  g_isr1Mode = -1;
+static bool g_irqOn = true;            // interrupts() / noInterrupts()
+static bool g_irqPending = false;      // 割り込み禁止中に立ち下がりが来た (INTF1)
+static bool g_inIsr = false;
+static uint64_t g_speedLowUntil = 0;   // この時刻まで D3 が LOW
+static bool g_speedSpike = false;      // ノイズ: 割り込みの処理が始まったときには、もう HIGH に戻っている
+static double g_revPerUs = 0;          // 車輪の回転の速さ [回転/us]
+static double g_rev = 0;               // 車輪の回転位置 [回転]
+static long   g_nextPulse = 0;         // 次に来る磁石の通し番号
+static int    g_magnets = 1;           // 磁石の数 (スケッチの SPEED_MAGNETS に合わせる)
+static bool   g_uneven = false;        // 磁石の間隔をわざとずらす
+static int    g_bounce = 0;            // 1 パルスごとのチャタリング (余分な立ち下がり) の回数
+static uint64_t g_noisePeriodUs = 0, g_noiseNextUs = 0;  // 短いノイズの間隔 (0 = なし)
+static long   g_pulses = 0, g_spikes = 0;
+
+void simAttachInterrupt(int num, void (*isr)(), int mode) {
+  if (num == 1) { g_isr1 = isr; g_isr1Mode = mode; }
+}
+static void simIrq1() {  // D3 の立ち下がり
+  if (!g_isr1 || g_isr1Mode != FALLING) return;
+  if (!g_irqOn || g_inIsr) { g_irqPending = true; return; }
+  g_inIsr = true;
+  g_isr1();
+  g_inIsr = false;
+}
+void simInterrupts(bool enable) {
+  g_irqOn = enable;
+  if (enable && g_irqPending) { g_irqPending = false; simIrq1(); }
+}
+// k 番目の磁石が来る回転位置 [回転]。g_uneven のときは磁石ごとに位置をずらす
+static double pulsePos(long k) {
+  static const double off[4] = {0, 0.12, -0.08, 0.05};
+  long rev = k / g_magnets;
+  int j = (int)(k % g_magnets);
+  return rev + (j + (g_uneven ? off[j % 4] : 0.0)) / g_magnets;
+}
+
+int simDigitalRead(uint8_t pin) {
+  if (pin == 2) return g_button ? LOW : HIGH;
+  if (pin == 3) return (!g_speedSpike && g_us < g_speedLowUntil) ? LOW : HIGH;
+  return HIGH;
+}
 void simAdvanceUs(uint64_t us);
 void simWdtEnable(int) { g_wdtEnabled = true; g_lastWdtUs = g_us; }
 void simWdtReset() {
@@ -209,10 +258,36 @@ struct Rw1063 {
   }
 } lcd;
 
-void simAdvanceUs(uint64_t us) {
+static void advanceDevices(uint64_t us) {
   ina.advance(us / 1e6);
   g_us += us;
+  g_rev += g_revPerUs * us;
   if (g_wdtEnabled && g_us - g_lastWdtUs > g_maxWdtGapUs) g_maxWdtGapUs = g_us - g_lastWdtUs;
+}
+// 時間を進める。途中で磁石やノイズが来たら、その時刻で割り込みを起こす
+void simAdvanceUs(uint64_t us) {
+  const uint64_t end = g_us + us;
+  for (;;) {
+    uint64_t tPulse = UINT64_MAX, tNoise = g_noisePeriodUs ? g_noiseNextUs : UINT64_MAX;
+    if (g_revPerUs > 0) tPulse = g_us + (uint64_t)std::ceil(std::max(0.0, (pulsePos(g_nextPulse) - g_rev) / g_revPerUs));
+    uint64_t t = std::max(g_us, std::min(tPulse, tNoise));  // チャタリングで時刻が先に進んでいることがある
+    if (t > end) break;
+    advanceDevices(t - g_us);
+    if (t == tPulse) {
+      g_rev = pulsePos(g_nextPulse++);
+      g_pulses++;
+      g_speedLowUntil = g_us + 1000;
+      simIrq1();
+      for (int b = 0; b < g_bounce; b++) { advanceDevices(30); simIrq1(); }  // 30us ごとに跳ね返る
+    } else {
+      g_noiseNextUs += g_noisePeriodUs;
+      g_spikes++;
+      g_speedSpike = true;
+      simIrq1();
+      g_speedSpike = false;
+    }
+  }
+  if (end > g_us) advanceDevices(end - g_us);
 }
 bool simI2cWrite(uint8_t a, const uint8_t *d, uint8_t len) {
   if (a == 0x40) return ina.write(d, len);
@@ -283,6 +358,17 @@ static void runFor(uint64_t ms) {
     simAdvanceUs(100);  // loop 1 回あたりの CPU 時間
   }
 }
+static std::string firstLine(const std::string &name) {
+  std::string p = g_sdDir + "/" + name;
+  FILE *fp = fopen(p.c_str(), "rb");
+  if (!fp) return "(ファイルなし)";
+  char buf[256] = "";
+  if (!fgets(buf, sizeof buf, fp)) buf[0] = '\0';
+  fclose(fp);
+  std::string l = buf;
+  while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+  return l;
+}
 static std::string lastLine(const std::string &name) {
   std::string p = g_sdDir + "/" + name, line, last;
   FILE *fp = fopen(p.c_str(), "rb");
@@ -322,6 +408,7 @@ int main(int argc, char **argv) {
   if (argc < 4) { fprintf(stderr, "usage: sim <state> <sddir> <cold|warm>\n"); return 2; }
   g_sdDir = argv[2];
   bool warm = std::string(argv[3]) == "warm";
+  g_magnets = SPEED_MAGNETS;
   lcd.powerOn();
   const std::string eePath = std::string(argv[1]) + ".eeprom";
   loadEeprom(eePath);
@@ -397,6 +484,19 @@ int main(int argc, char **argv) {
       std::string f; is >> f; std::string s = quoted(is), l = lastLine(f);
       check(l.find(s) != std::string::npos, f + " の最終行に \"" + s + "\" (実際: \"" + l + "\")");
     }
+    else if (cmd == "expect_first") {
+      std::string f; is >> f; std::string s = quoted(is), l = firstLine(f);
+      check(l == s, f + " の見出し行が \"" + s + "\" (実際: \"" + l + "\")");
+    }
+    else if (cmd == "expect_last_col") {  // 最終行の col 列目 (0 から) の値の範囲
+      std::string f; is >> f; int col = (int)num(is); double lo = num(is), hi = num(is);
+      std::string l = lastLine(f), cell;
+      std::istringstream ls(l);
+      for (int k = 0; k <= col && std::getline(ls, cell, ','); k++) {}
+      double v = strtod(cell.c_str(), nullptr);
+      char b[200]; snprintf(b, sizeof b, "%s の最終行の %d 列目 %s が %g〜%g", f.c_str(), col + 1, cell.c_str(), lo, hi);
+      check(!cell.empty() && v >= lo && v <= hi, b);
+    }
     else if (cmd == "expect_lines") {
       std::string f; is >> f; int lo = (int)num(is), hi = (int)num(is), n = countLines(f);
       check(n >= lo && n <= hi, f + " の行数 " + std::to_string(n) + " が " + std::to_string(lo) + "〜" + std::to_string(hi));
@@ -405,6 +505,24 @@ int main(int argc, char **argv) {
       double lo = num(is), hi = num(is);
       char b[160]; snprintf(b, sizeof b, "積算 %.1f mAh が %.1f〜%.1f", meas.chargemAh, lo, hi);
       check(meas.chargemAh >= lo && meas.chargemAh <= hi, b);
+    }
+    else if (cmd == "wheel") g_revPerUs = num(is) / 3.6 / WHEEL_CIRCUMFERENCE_M / 1e6;  // 車輪の速さ [km/h]
+    else if (cmd == "wheel_bounce") g_bounce = (int)num(is);
+    else if (cmd == "wheel_uneven") { std::string a; is >> a; g_uneven = (a == "on"); }
+    else if (cmd == "wheel_noise") {  // 数 us で消えるノイズを 1 秒に n 回 (0 = なし)
+      double hz = num(is);
+      g_noisePeriodUs = hz > 0 ? (uint64_t)(1e6 / hz) : 0;
+      g_noiseNextUs = g_us + g_noisePeriodUs / 3;
+    }
+    else if (cmd == "expect_speed") {  // 表示・記録している速さ [km/h] の範囲
+      double lo = num(is), hi = num(is);
+      char b[160]; snprintf(b, sizeof b, "速さ %.2f km/h が %.2f〜%.2f", speedKmh, lo, hi);
+      check(speedKmh >= lo && speedKmh <= hi, b);
+    }
+    else if (cmd == "expect_dist") {  // 走った距離 [m] の範囲
+      double lo = num(is), hi = num(is), d = distanceNowM();
+      char b[200]; snprintf(b, sizeof b, "距離 %.1f m が %.1f〜%.1f (磁石が来た回数 %ld、ノイズ %ld 回)", d, lo, hi, g_pulses, g_spikes);
+      check(d >= lo && d <= hi, b);
     }
     else if (cmd == "expect_clean") {
       char b[200];

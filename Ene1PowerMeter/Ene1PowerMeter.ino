@@ -4,6 +4,8 @@
  *   センサー   : INA228 (Strawberry Linux #11228, シャント 2mΩ, I2C 0x40)
  *   表示       : 秋月 I2C キャラクター液晶 20x4 (ACM2004D-FLW-FBW-IIC, 制御IC RW1063)
  *   記録       : microSD (SPI, CS = D10)
+ *   速度センサー : 車輪の磁石 + ホール IC (またはリードスイッチ) を D3 (INT1) に。車輪 1 周の距離は
+ *                  WHEEL_CIRCUMFERENCE_M で設定する
  *
  * ボタン (D2 - GND)
  *   3 秒以上押して離す : 積算 mAh・経過時間を 0 にして新しいログファイルを作る
@@ -23,6 +25,8 @@
  *   - LCD をノイズで化けたままにしないよう、5 秒ごとに初期化コマンドを再送する
  *   - SD カードが抜けたら、flush のたびの状態確認 (CMD13) で数秒以内に NO SD にする
  *   - I2C がノイズで固まっても Wire のタイムアウト (3ms) で復帰する
+ *   - 速度センサーのチャタリングや短いノイズは捨てる。線が切れても速さが 0 になるだけで、
+ *     積算と記録は続く。走った距離も積算 mAh と同じように引き継ぐ
  *   - 処理が固まったら 8 秒でウォッチドッグがリセットする
  *     (Optiboot の Nano はそのまま再開する。旧ブートローダの Nano は再起動を繰り返すので、
  *      Optiboot を書き込むか USE_WATCHDOG を 0 にする)
@@ -37,6 +41,7 @@
  *   A4 = SDA, A5 = SCL  (INA228 と LCD で共用。4.7kΩ で 5V へ外付けプルアップ)
  *   D11 = MOSI, D12 = MISO, D13 = SCK, D10 = CS (SD カード)
  *   D2  = ボタン (内部プルアップ、押すと LOW)
+ *   D3  = 速度センサー (内部プルアップ + 外付け 4.7kΩ を推奨、磁石が来ると LOW)
  */
 
 #include <Wire.h>
@@ -73,8 +78,22 @@ constexpr uint16_t EE_SAVE_MS      = 2000;
 constexpr uint16_t BTN_STUCK_MS    = 10000;    // これ以上押されたままなら故障 (ショート) とみなす [ms]
 constexpr uint8_t  PIN_SD_CS       = 10;
 constexpr uint8_t  PIN_BTN         = 2;
+constexpr uint8_t  PIN_SPEED       = 3;        // 速度センサー (INT1。外部割り込みが使えるのは D2 と D3 だけ)
 #define SERIAL_DEBUG 1   // 1: 起動時の I2C スキャン結果と CSV を USB シリアル (115200bps) に出す
 #define USE_WATCHDOG 1   // 1: 8 秒固まったら自動リセット (旧ブートローダの Nano 互換機は下の注意を参照)
+
+// ---- 速度センサー (車輪に付けた磁石が、車体側のホール IC の前を通るたびに 1 パルス) ----
+// 車輪 1 周で進む距離 [m]。速さと距離のすべてに効く。初期値はタイヤの外径 0.50m (IRC EC-R 20x1.75) x π。
+// 実際はドライバーが乗るとタイヤがつぶれて 1〜3% 短くなるので、乗った状態で 1 周転がして測った値にする
+constexpr float    WHEEL_CIRCUMFERENCE_M = 1.571f;
+// 車輪 1 周あたりの磁石の数 (1〜8)。増やすと、低い速さでも表示が早く変わる。
+// 速さは車輪 1 周ぶんのパルスの間隔から出すので、磁石の間隔がそろっていなくても誤差にならない
+constexpr uint8_t  SPEED_MAGNETS   = 1;
+// これより速くなるパルスは、チャタリング・ノイズとして捨てる [km/h]。実際の最高速より十分大きくする
+constexpr float    SPEED_MAX_KMH   = 90.0f;
+// これより遅くなったら 0km/h と表示する [km/h]。パルスが来なくなってから 0 にするまでの時間がこれで決まる
+// (初期値では 1.9 秒)
+constexpr float    SPEED_MIN_KMH   = 3.0f;
 
 // INA228 の ADC 設定 (データシート ADC_CONFIG レジスタ)
 constexpr uint8_t INA_MODE   = 0xB;  // 0xB = シャント電圧 + バス電圧 連続測定
@@ -159,8 +178,26 @@ constexpr uint32_t INA_CONV_PERIOD_US =
 static_assert(INA_MODE == 0xB, "INA_CONV_PERIOD_US はシャント + バス電圧の連続測定 (MODE=0xB) を前提にしている");
 static_assert((uint32_t)LOG_INTERVAL_MS * 1000UL >= INA_CONV_PERIOD_US,
               "LOG_INTERVAL_MS が INA228 の更新周期より短い (同じ値が並ぶだけ)。INA_AVG か変換時間を小さくする");
+// 速度センサーの換算
+constexpr float    PULSE_DIST_M = WHEEL_CIRCUMFERENCE_M / SPEED_MAGNETS;  // 1 パルスで進む距離 [m]
+// パルスの間隔の下限 [us] (SPEED_MAX_KMH で走ったときの間隔)。これより短い間隔のパルスは捨てる
+constexpr uint32_t SPEED_MIN_PULSE_US = (uint32_t)(PULSE_DIST_M / (SPEED_MAX_KMH / 3.6f) * 1e6f);
+// パルスがこれだけ来なければ止まったとみなす [us] (SPEED_MIN_KMH で走ったときの間隔)
+constexpr uint32_t SPEED_TIMEOUT_US   = (uint32_t)(PULSE_DIST_M / (SPEED_MIN_KMH / 3.6f) * 1e6f);
+// パルスの間隔 [us] から速さ [0.01km/h] を出す定数 (= PULSE_DIST_M x 3.6e6 x 100)。
+// 整数の割り算で済ませる (浮動小数点の割り算はプログラムが 200 バイトほど増える)
+constexpr uint32_t SPEED_K = (uint32_t)(PULSE_DIST_M * 3.6e8f + 0.5f);
+static_assert(SPEED_MAGNETS >= 1 && SPEED_MAGNETS <= 8, "SPEED_MAGNETS は 1〜8");
+static_assert(WHEEL_CIRCUMFERENCE_M > 0.3f && WHEEL_CIRCUMFERENCE_M < 3.0f, "WHEEL_CIRCUMFERENCE_M は車輪 1 周の距離 [m]");
+static_assert(SPEED_MIN_PULSE_US >= 1000, "パルスの間隔が 1ms を切る (SPEED_MAX_KMH が大きすぎるか、磁石が多すぎる)");
+static_assert(SPEED_TIMEOUT_US > 2 * SPEED_MIN_PULSE_US && SPEED_TIMEOUT_US <= 10000000UL,
+              "SPEED_MIN_KMH は SPEED_MAX_KMH より十分小さく、0 になるまで 10 秒以内にする");
+
 // flush する行数 (LOG_FLUSH_MS ごと)
 constexpr uint16_t LOG_FLUSH_EVERY = LOG_FLUSH_MS / LOG_INTERVAL_MS ? LOG_FLUSH_MS / LOG_INTERVAL_MS : 1;
+
+// CSV の見出し (SD のファイルの先頭と、USB シリアルに出す)
+const char CSV_HEADER[] PROGMEM = "time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m";
 
 // ============================================================================
 //  グローバル
@@ -182,7 +219,12 @@ float lastKnownTotalmAh = 0;
 // INA228 が走行中に設定を失った (電源瞬断など) ときに、それまでの積算を引き継ぐための値。
 // 積算そのものは INA228 の CHARGE レジスタだけで行い、ソフトでは足し込まない
 float    chargeOffsetmAh = 0;
-uint8_t  inaRecoverCount = 0;      // INA228 を再設定した回数 (LCD 3 行目に表示)
+uint8_t  inaRecoverCount = 0;      // INA228 を再設定した回数 (LCD 4 行目に表示)
+
+// 速さと距離 (speedUpdate で更新する)
+float    speedKmh        = 0;      // [km/h]
+float    distanceM       = 0;      // 走った距離 [m] = distOffsetM + パルス数 x PULSE_DIST_M
+float    distOffsetM     = 0;      // Nano のリセット・電源断の前に走った距離 (起動時に戻す)
 
 bool     sdOk            = false;
 bool     heartbeat       = false;  // 記録するたびに反転 (4 行目末尾の * で動作確認)
@@ -201,6 +243,7 @@ struct Persist {
   uint32_t elapsedMs;
   float    chargeOffsetmAh;
   float    totalmAh;        // 最後に正しく読めた積算 (INA228 が設定を失っていたときに引き継ぐ)
+  float    distM;           // 走った距離 [m]
   uint32_t check;
 };
 Persist persist __attribute__((section(".noinit")));
@@ -212,10 +255,11 @@ struct SavedRecord {
   uint32_t seq;        // 書いた順番 (大きいほど新しい)
   float    totalmAh;   // 積算 mAh
   uint32_t elapsedMs;  // 経過時間
+  float    distM;      // 走った距離 [m]
   uint16_t magic;      // この形の記録であることの印
-  uint16_t crc;        // ここより前の 14 バイトの CRC
+  uint16_t crc;        // ここより前の 18 バイトの CRC
 };
-static_assert(sizeof(SavedRecord) == 16, "SavedRecord は 16 バイト");
+static_assert(sizeof(SavedRecord) == 20, "SavedRecord は 20 バイト");
 
 // ============================================================================
 //  ウォッチドッグ
@@ -434,13 +478,87 @@ bool inaMeasure(Measurement &m) {
 }
 
 // ============================================================================
-//  リセットされても消えない値 (経過時間・積算オフセット)
+//  速度センサー
+//  磁石がホール IC の前に来ると出力が LOW になる (オープンドレイン)。その立ち下がりを INT1 の
+//  割り込みで受け、時刻を記録する。速さは車輪 1 周ぶん (SPEED_MAGNETS 個) のパルスの間隔から出す。
+//  - 割り込みの中で D3 がまだ LOW かを確かめ、数 us で消えたノイズは数えない
+//  - 前のパルスから SPEED_MIN_PULSE_US 以内のパルス (チャタリング・ノイズ) は数えない
+//  - パルスが SPEED_TIMEOUT_US 来なければ止まったとみなし、速さを 0 にする
+// ============================================================================
+volatile uint32_t spdPulses = 0;   // 数えたパルスの数 (起動・積算リセットから) → 距離
+volatile uint32_t spdLastUs = 0;   // 最後に数えたパルスの時刻 [us]
+volatile uint32_t spdSpanUs = 0;   // 直近 spdSpanN 個ぶんのパルスの間隔の合計 [us]
+volatile uint8_t  spdSpanN  = 0;   // 0 = 速さを出せない (止まっている、動き出して 1 パルス目)
+volatile uint8_t  spdRun    = 0;   // 止まってから続けて数えたパルスの数 (SPEED_MAGNETS で頭打ち)
+uint32_t spdRing[SPEED_MAGNETS];   // 直近のパルスの時刻 (割り込みの中だけで使う)
+uint8_t  spdRingIdx = 0;           // 次に書く場所 (= いちばん古い時刻の場所)
+
+void speedIsr() {
+  uint32_t t = micros();
+  if (digitalRead(PIN_SPEED) != LOW) return;   // もう HIGH に戻っている = 数 us のノイズ
+  uint8_t k = spdRun;
+  if (k && t - spdLastUs < SPEED_MIN_PULSE_US) return;  // チャタリング・ありえない速さ
+  spdPulses++;
+  spdLastUs = t;
+  if (k) {  // k 個前のパルスからの時間 (k が SPEED_MAGNETS なら、ちょうど車輪 1 周)
+    spdSpanUs = t - spdRing[(uint8_t)(spdRingIdx + SPEED_MAGNETS - k) % SPEED_MAGNETS];
+    spdSpanN = k;
+  }
+  spdRing[spdRingIdx] = t;
+  spdRingIdx = (uint8_t)(spdRingIdx + 1) % SPEED_MAGNETS;
+  if (k < SPEED_MAGNETS) spdRun = k + 1;
+}
+
+void speedBegin() {
+  pinMode(PIN_SPEED, INPUT_PULLUP);  // センサーが外れていても HIGH に保つ (パルスは来ない)
+  attachInterrupt(digitalPinToInterrupt(PIN_SPEED), speedIsr, FALLING);
+}
+
+// 走った距離 [m] (いつ呼んでもよい)
+float distanceNowM() {
+  noInterrupts();
+  uint32_t n = spdPulses;
+  interrupts();
+  return distOffsetM + n * PULSE_DIST_M;
+}
+
+// 速さと距離を最新にする (表示・記録の直前に呼ぶ)
+void speedUpdate() {
+  noInterrupts();
+  uint32_t n = spdPulses, span = spdSpanUs;
+  uint8_t  cnt = spdSpanN;
+  uint32_t since = micros() - spdLastUs;
+  if (spdRun && since > SPEED_TIMEOUT_US) {  // パルスが来なくなった = 止まった
+    spdRun = 0;
+    spdSpanN = 0;
+    cnt = 0;
+  }
+  interrupts();
+  distanceM = distOffsetM + n * PULSE_DIST_M;
+  if (cnt == 0) { speedKmh = 0; return; }
+  uint32_t per = span / cnt;     // パルス 1 つぶんの間隔 (車輪 1 周の平均)
+  if (since > per) per = since;  // 次のパルスが遅れている = 減速中。いまの速さはこれより遅い
+  speedKmh = ((SPEED_K + per / 2) / per) * 0.01f;
+}
+
+// 距離を 0 にする (積算リセット)
+void speedResetDistance() {
+  noInterrupts();
+  spdPulses = 0;
+  interrupts();
+  distOffsetM = 0;
+  distanceM = 0;
+}
+
+// ============================================================================
+//  リセットされても消えない値 (経過時間・積算オフセット・距離)
 // ============================================================================
 uint32_t persistCheckValue(const Persist &p) {
-  uint32_t qoff, qtot;
+  uint32_t qoff, qtot, dist;
   memcpy(&qoff, &p.chargeOffsetmAh, sizeof(qoff));
   memcpy(&qtot, &p.totalmAh, sizeof(qtot));
-  return p.magic ^ p.elapsedMs ^ qoff ^ (qtot * 3UL) ^ 0x5A5AA5A5UL;
+  memcpy(&dist, &p.distM, sizeof(dist));
+  return p.magic ^ p.elapsedMs ^ qoff ^ (qtot * 3UL) ^ (dist * 5UL) ^ 0x5A5AA5A5UL;
 }
 
 void persistSave(uint32_t now) {
@@ -448,6 +566,7 @@ void persistSave(uint32_t now) {
   persist.elapsedMs = now - timerStartMs;
   persist.chargeOffsetmAh = chargeOffsetmAh;
   persist.totalmAh = lastKnownTotalmAh;
+  persist.distM = distanceNowM();
   persist.check = persistCheckValue(persist);
 }
 
@@ -457,16 +576,17 @@ bool persistValid() {
 
 // ============================================================================
 //  電源を切っても消えない保存 (EEPROM)
-//  積算 mAh と経過時間を EE_SAVE_MS ごとに保存し、電力計の電源が全部落ちて戻ったときは
+//  積算 mAh・経過時間・距離を EE_SAVE_MS ごとに保存し、電力計の電源が全部落ちて戻ったときは
 //  続きから数える。
-//  - 1 回分 16 バイトを、64 か所に順番に書く (同じ場所への書き込みを 64 分の 1 にする)。
-//    2 秒ごとなら 1 か所は 128 秒に 1 回で、書き換え寿命 10 万回に届くのは約 3500 時間後
+//  - 1 回分 20 バイトを、50 か所に順番に書く (同じ場所への書き込みを 50 分の 1 にする)。
+//    2 秒ごとなら 1 か所は 100 秒に 1 回で、書き換え寿命 10 万回に届くのは約 2800 時間後
+//  - 記録の形を変えたら EE_MAGIC も変える (古い形の記録は読まない)
 //  - 書いている途中で電源が落ちた分は CRC で見分け、1 つ前の保存を使う
 //  - 1 バイトの書き込みに約 3.3ms かかるので、loop のたびに 1 バイトずつ書いて、
 //    表示と記録を止めない
 // ============================================================================
-constexpr uint16_t EE_MAGIC = 0xE1A1;
-constexpr uint8_t  EE_SLOTS = 64;
+constexpr uint16_t EE_MAGIC = 0xE1A2;  // 0xE1A1 = 距離のない 16 バイトの形 (読まない)
+constexpr uint8_t  EE_SLOTS = 50;
 static_assert((uint16_t)EE_SLOTS * sizeof(SavedRecord) <= E2END + 1, "EEPROM に収まらない");
 
 SavedRecord eeBuf;                          // 書き込み中の 1 回分
@@ -492,6 +612,7 @@ bool eeLoad(SavedRecord &best) {
     eeprom_read_block(&r, (const void *)(uintptr_t)(slot * sizeof(SavedRecord)), sizeof(r));
     if (r.magic != EE_MAGIC || r.crc != crc16((const uint8_t *)&r, sizeof(r) - 2)) continue;
     if (!(fabs(r.totalmAh) < 1e7f)) continue;  // NaN・無限大・ありえない値は使わない
+    if (!(r.distM >= 0.0f && r.distM < 1e8f)) continue;
     if (!found || (int32_t)(r.seq - best.seq) > 0) { best = r; found = true; }
   }
   if (found) eeSeq = best.seq;
@@ -499,10 +620,11 @@ bool eeLoad(SavedRecord &best) {
 }
 
 // 次の場所に書き始める (実際の書き込みは eeService が 1 バイトずつ行う)
-void eeStart(float totalmAh, uint32_t elapsedMs) {
+void eeStart(float totalmAh, uint32_t elapsedMs, float distM) {
   eeBuf.seq = ++eeSeq;
   eeBuf.totalmAh = totalmAh;
   eeBuf.elapsedMs = elapsedMs;
+  eeBuf.distM = distM;
   eeBuf.magic = EE_MAGIC;
   eeBuf.crc = crc16((const uint8_t *)&eeBuf, sizeof(eeBuf) - 2);
   eeAddr = (uint16_t)(eeBuf.seq % EE_SLOTS) * sizeof(SavedRecord);
@@ -525,9 +647,9 @@ void eeFinish() {
   }
 }
 
-void eeSaveNow(float totalmAh, uint32_t elapsedMs) {
+void eeSaveNow(float totalmAh, uint32_t elapsedMs, float distM) {
   eeFinish();
-  eeStart(totalmAh, elapsedMs);
+  eeStart(totalmAh, elapsedMs, distM);
   eeFinish();
 }
 
@@ -563,26 +685,34 @@ void lcdShowMeasurement(uint32_t now) {
     lcdLine(1, line);
   }
 
-  // 3行目: 経過時間 (リセットから) "TIME  12:34"  (100 分以上は "123:45")
-  //        INA228 を再設定したことがあれば末尾に "INA!回数" を出す
+  // 3行目: 経過時間 (リセットから) と速さ "TIME  12:34 32.5km/h" (100 分以上は "TIME 123:45 32.5km/h")
   uint32_t s = (now - timerStartMs) / 1000;
-  int n = snprintf_P(line, sizeof(line), PSTR("TIME  %02lu:%02u"), s / 60, (unsigned)(s % 60));
-  if (inaRecoverCount && n > 0 && n < 14)
-    snprintf_P(line + n, sizeof(line) - n, PSTR("   INA!%u"), inaRecoverCount);
+  char tm[12], sp[8];
+  snprintf_P(tm, sizeof(tm), PSTR("%02lu:%02u"), s / 60, (unsigned)(s % 60));
+  dtostrf(constrain(speedKmh, 0.0f, 99.9f), 4, 1, sp);   // " 5.0" / "32.5"
+  snprintf_P(line, sizeof(line), PSTR("TIME %6s %skm/h"), tm, sp);
   lcdLine(2, line);
 
-  // 4行目: SD 状態 "REC LOG003.CSV     *" / "NO SD"
+  // 4行目: SD 状態 "REC LOG003.CSV     *" (* は記録するたびに点滅) / "NO SD"
+  //        INA228 を再設定したことがあれば "REC " を省いて "INA!回数" を出す: "LOG003.CSV   INA!1 *"
   //        ボタンを 3 秒以上押している間は、離すとリセットされることを知らせる
   uint32_t held = btnDown ? now - btnDownMs : 0;
   if (held >= BTN_STUCK_MS) {
     lcdLineP(3, F("BUTTON STUCK?"));
   } else if (held >= RESET_HOLD_MS) {
     lcdLineP(3, F("RELEASE=RESET mAh"));
-  } else if (sdOk) {
-    snprintf_P(line, sizeof(line), PSTR("REC %-15s%c"), logName, heartbeat ? '*' : ' ');
-    lcdLine(3, line);
   } else {
-    lcdLineP(3, F("NO SD"));
+    if (!inaRecoverCount)
+      snprintf_P(line, sizeof(line), sdOk ? PSTR("REC %s") : PSTR("NO SD"), logName);
+    else
+      snprintf_P(line, sizeof(line), PSTR("%-13sINA!%u"), sdOk ? logName : "NO SD", inaRecoverCount);
+    if (sdOk) {
+      size_t n = strlen(line);
+      while (n < LCD_COLS - 1) line[n++] = ' ';
+      line[LCD_COLS - 1] = heartbeat ? '*' : ' ';
+      line[LCD_COLS] = '\0';
+    }
+    lcdLine(3, line);
   }
 }
 
@@ -613,7 +743,7 @@ bool openNewLog() {
     if (SD.exists(name)) continue;
     logFile = SD.open(name, FILE_WRITE);
     if (!logFile) return false;
-    logFile.println(F("time_s,voltage_V,current_A,power_W,charge_mAh"));
+    logFile.println((const __FlashStringHelper *)CSV_HEADER);
     logFile.flush();
     if (logFile.getWriteError()) {
       logFile.close();
@@ -651,7 +781,7 @@ void sdNextFile() {
   printSdStatus();
 }
 
-// 1 行出力: 経過時間[s] (ミリ秒まで), 電圧[V], 電流[A], 電力[W], 積算[mAh]
+// 1 行出力: 経過時間[s] (ミリ秒まで), 電圧[V], 電流[A], 電力[W], 積算[mAh], 速さ[km/h], 距離[m]
 void printCsvRow(Print &out, uint32_t elapsedMs) {
   char buf[16];
   snprintf_P(buf, sizeof(buf), PSTR("%lu.%03u,"), elapsedMs / 1000,
@@ -660,7 +790,9 @@ void printCsvRow(Print &out, uint32_t elapsedMs) {
   out.print(dtostrf(meas.voltage, 1, 3, buf));  out.print(',');
   out.print(dtostrf(meas.current, 1, 3, buf));  out.print(',');
   out.print(dtostrf(meas.power, 1, 2, buf));    out.print(',');
-  out.println(dtostrf(meas.chargemAh, 1, 2, buf));
+  out.print(dtostrf(meas.chargemAh, 1, 2, buf)); out.print(',');
+  out.print(dtostrf(speedKmh, 1, 2, buf));       out.print(',');
+  out.println(dtostrf(distanceM, 1, 1, buf));
 }
 
 // SD カードがまだ応答するかを CMD13 (SEND_STATUS) で確かめる。カードの初期化はしない。
@@ -709,14 +841,15 @@ void restartTimer(uint32_t elapsedMs) {
   nextLcdMs = now;
 }
 
-// 長押し: 積算 mAh・経過時間を 0 にして新しいログ
+// 長押し: 積算 mAh・経過時間・距離を 0 にして新しいログ
 void doCounterReset() {
   bool ok = inaResetCharge();
   chargeOffsetmAh = 0;
   inaRecoverCount = 0;
   meas.chargemAh = 0;
   lastKnownTotalmAh = 0;
-  eeSaveNow(0, 0);  // 電源を切っても 0 から始まるように、すぐに保存する
+  speedResetDistance();
+  eeSaveNow(0, 0, 0);  // 電源を切っても 0 から始まるように、すぐに保存する
   lcdLineP(0, ok ? F("RESET mAh") : F("RESET FAILED"));
   lcdLineP(1, F(""));
   lcdLineP(2, F(""));
@@ -789,6 +922,7 @@ void setup() {
   ramPaint();
 #endif
   pinMode(PIN_BTN, INPUT_PULLUP);
+  speedBegin();  // 起動中に走っても距離を数える
 #if SERIAL_DEBUG
   Serial.begin(115200);
   Serial.println(F("Ene-1 PowerMeter"));
@@ -828,16 +962,18 @@ void setup() {
   bool warmOk = persistValid();
   float knownTotal = warmOk ? persist.totalmAh : eeOk ? saved.totalmAh : 0;
   uint32_t knownElapsedMs = warmOk ? persist.elapsedMs : eeOk ? saved.elapsedMs : 0;
+  float knownDistM = warmOk ? persist.distM : eeOk ? saved.distM : 0;
   lastKnownTotalmAh = knownTotal;
 
   uint8_t st = inaFound ? inaCheckConfig() : (uint8_t)INA_NO_RESPONSE;
   uint32_t resumeElapsedMs = knownElapsedMs;
+  float resumeDistM = knownDistM;
   bool resumed = false;   // 積算を引き継いだ (表示を早く出すため、起動画面を短くする)
   if (st == INA_CONFIGURED) {
     // INA228 の設定が残っている = INA228 は電源が切れておらず Nano だけがリセットされた。
     // INA228 の CHARGE はそのまま続いているので、オフセットだけ戻す
     chargeOffsetmAh = warmOk ? persist.chargeOffsetmAh : 0;
-    if (!warmOk) resumeElapsedMs = 0;
+    if (!warmOk) { resumeElapsedMs = 0; resumeDistM = 0; }  // 時間と距離は 0 から (積算は INA228 が続けている)
     resumed = true;
     lcdLineP(1, F("RESUMED (mAh KEPT)"));
   } else if (st == INA_NOT_CONFIGURED) {
@@ -865,12 +1001,13 @@ void setup() {
                  : resumed ? F("restored (mAh kept)") : F("configured"));
   Serial.print(F("SHUNT_CAL=")); Serial.println(SHUNT_CAL);
 #endif
+  distOffsetM = resumeDistM;
 
   sdBegin();
   lcdLineP(2, sdOk ? F("SD OK") : F("NO SD"));
   if (sdOk) lcdLine(3, logName);
 #if SERIAL_DEBUG
-  Serial.println(F("time_s,voltage_V,current_A,power_W,charge_mAh"));
+  Serial.println((const __FlashStringHelper *)CSV_HEADER);
 #endif
   // 起動画面を見せる時間。積算を引き継いだときは、電流の表示を早く出すため短くする
   delay(resumed ? 500 : 1500);
@@ -899,20 +1036,22 @@ void loop() {
     }
     // 記録のほうが頻繁なら、記録のときに読んだ最新値を表示する (I2C の読み出しを減らす)
     if (LOG_INTERVAL_MS > LCD_INTERVAL_MS) inaMeasure(meas);
+    speedUpdate();
     lcdShowMeasurement(now);
     persistSave(now);
   }
 
-  // 積算 mAh と経過時間を EEPROM に保存し始める (前の保存を書き終えていれば)
+  // 積算 mAh・経過時間・距離を EEPROM に保存し始める (前の保存を書き終えていれば)
   if (now - lastEeSaveMs >= EE_SAVE_MS && eeWriteIdx >= sizeof(eeBuf)) {
     lastEeSaveMs = now;
-    eeStart(lastKnownTotalmAh, now - timerStartMs);
+    eeStart(lastKnownTotalmAh, now - timerStartMs, distanceNowM());
   }
 
   if ((int32_t)(now - nextLogMs) >= 0) {
     nextLogMs += LOG_INTERVAL_MS;    // 一定の刻みを保つ (ずれが溜まらない)
     if ((int32_t)(now - nextLogMs) >= 0) nextLogMs = now + LOG_INTERVAL_MS;
     inaMeasure(meas);                // 記録用に最新値を読む
+    speedUpdate();
     if (sdOk) writeLog(now);
 #if SERIAL_DEBUG
     printCsvRow(Serial, now - timerStartMs);
