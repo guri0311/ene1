@@ -230,7 +230,7 @@ REC LOG003.CSV     *      記録中のファイル（NO SD、INA!回数、ボタ
 | `EE_SAVE_MS` / `EE_SLOTS` | 2000 / 50 | |
 | `RESET_HOLD_MS` / `BTN_STUCK_MS` | 3000 / 10000 | |
 | `WHEEL_CIRCUMFERENCE_M` | 1.571 | 車輪 1 周の距離（外径 0.50m × π）。**実測して直す** |
-| `SPEED_MAGNETS` / `SPEED_MAX_KMH` / `SPEED_MIN_KMH` | 1 / 90 / 3 | 90km/h より速くなる間隔のパルスはチャタリングとして捨てる |
+| `SPEED_MAGNETS` / `SPEED_MAX_KMH` / `SPEED_MIN_KMH` | 1 / 110 / 3 | 110km/h より速くなる間隔のパルスはチャタリングとして捨てる（初期値では前のパルスから 51ms 以内） |
 | `SERIAL_DEBUG` / `USE_WATCHDOG` | 1 / 1 | |
 
 ピン：A4/A5 = I2C（INA228 0x40、LCD 0x3C〜0x3F を自動で探す）、D2 = ボタン、D3 = 速度センサー（INT1）、D10〜D13 = microSD（CS = D10）。
@@ -250,7 +250,7 @@ time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m
 - 20A を超えた分は 20A として数えるので、積算が少なくなる（`OVER`）
 - ファームウェアを書き換えると EEPROM の形が変わることがあるので、書き換えたら 3 秒長押しで 0 にしてから使う
 - LCD の 4 行の順番（行の先頭アドレス 00h / 40h / 14h / 54h）は、実機で確かめていない
-- `SPEED_MAX_KMH` は 90 だが、シミュレーションの最高速は 83〜86km/h（空気抵抗を減らすほど速くなる）。余裕が小さい（[12 章](#12-次にやること)）
+- `SPEED_MAX_KMH` は下りの最高速（シミュレーションで 83〜86km/h）に余裕を持たせて 110 に引き上げ済み
 
 ---
 
@@ -275,9 +275,7 @@ sudo apt-get install -y dosfstools mtools
 cd test/avr_emu && npm ci && node run.mjs
 ```
 
-CI（`.github/workflows/test.yml`）：push・PR・手動で動く。job は host-sim（host_sim を 2 回〔普通・検査付き〕と log_viewer）と avr-emu（ビルドのサイズを Summary に出してからエミュレーター）。同じブランチに新しく push されたら古い実行は止める。
-
-残っている警告：GitHub Actions の「Node.js 20 向けの action は古い」という警告（動作には影響しない。action のバージョンを上げれば消える）。
+CI（`.github/workflows/test.yml`）：push・PR・手動で動く。job は host-sim（host_sim を 2 回〔普通・検査付き〕と log_viewer）と avr-emu（ビルドのサイズを Summary に出してからエミュレーター）。同じブランチに新しく push されたら古い実行は止める。actions/checkout@v7・setup-node@v7・cache@v6 に更新済み。
 
 ---
 
@@ -313,7 +311,7 @@ CI（`.github/workflows/test.yml`）：push・PR・手動で動く。job は hos
 - **標高**：特別規則の ELEVATION 図（PDF 26 ページ）を `digitize_elevation.py` で 50m ごとに読み取った値。1 周で同じ高さに戻すため、読み取りのずれ（1 周で 1.3m）を距離に比例して戻している。スクリプトで作り直すと、コードの値との差は最大 0.3m
 - **カーブ**：同じ図の下の Curve Radius（破線の範囲と R の数字）を目で読んだ値（`CORNERS`）。ブレーキがシケインだけなので、いまはシケインの位置にしか効かない
 - **区間の名前**（`SECTIONS`）：表示用。ホームストレート、1・2 コーナー、S 字、逆バンク、ダンロップ、デグナー、立体交差の下、ヘアピン、200R、スプーン、バックストレート、130R、シケイン、最終コーナー
-- 参考：PDF 25 ページには公式のセクター（区間 1 = 1,658m、区間 2 = 936m、区間 3 = 2,130m、区間 4 = 1,084m）もある。まだ使っていない
+- **公式セクター**（`SECTORS`）：PDF 25 ページの区間 1（1,658m）・区間 2（936m）・区間 3（2,130m）・区間 4（1,084m、合計 5,808m のため終点を 5,807m に合わせる）。各アタックのセクターごとのタイムを `cli.mjs` とテレメトリー画面で表示し、`detail.csv` にも `sector` 列を出す
 
 ファームウェアとのつなぎ（`cli.mjs --firmware`）：シミュレーションの電流・電圧・車輪のパルスを host_sim のファームウェアに流し、電力計が書く CSV と LCD を確かめる。積算 mAh（10A 全開で 3393.2mAh）と距離（17.936km）がモデルと合った。
 
@@ -406,7 +404,7 @@ node tools/suzuka_sim/cli.mjs --set cdA=0.04 --set crr=0.0025  # 値を変える
 
 `suzuka-sim.js` が外に出しているもの：`simulate`（走行の計算）、`strategies`（4 つの走り方）、`optimizeBoost`（上りだけ増やす組み合わせを探す）、`findCruise`（電池の割合を使い切る速さ）、`forLapTime`（目標タイムに届く速さ）、`maxCdAFor`（目標タイムに必要な CdA）、`toCsv`・`toDetailCsv`（CSV）、`DEFAULTS`・`MOTOR`・`ELEVATION`・`SECTIONS`・`CORNERS` など。
 
-詳しい CSV（`detail.csv`）の列：`time_s, attack, phase, lap_distance_m, section, elevation_m, grade_pct, speed_kmh, voltage_V, current_A, power_W, charge_mAh, motor_current_A, field_pct, breaker_heat_pct`（Excel 用に BOM 付き）。
+詳しい CSV（`detail.csv`）の列：`time_s, attack, phase, lap_distance_m, sector, section, elevation_m, grade_pct, speed_kmh, voltage_V, current_A, power_W, charge_mAh, motor_current_A, field_pct, breaker_heat_pct`（Excel 用に BOM 付き）。
 
 ---
 
@@ -440,20 +438,18 @@ node tools/suzuka_sim/cli.mjs --set cdA=0.04 --set crr=0.0025  # 値を変える
    - 速度センサーの速さと距離が正しいか、振動で余分なパルスが出ないか
    - 20A を超えて `OVER` が出るか（何度も出るなら 81.92A のレンジを考える）
 2. **校正**：`R_SHUNT_OHM`（基準の電流計と比べる）、`WHEEL_CIRCUMFERENCE_M`（ドライバーが乗った状態で転がして測る。README の「校正」）
-3. **`SPEED_MAX_KMH` を見直す**：90km/h より速くなる間隔のパルスは捨てるので、下りで 90km/h を超えると速さと距離が狂う。シミュレーションの最高速は 83〜86km/h なので、100〜110 にしておくと安心（110km/h でもパルスの間隔は約 51ms あり、リードスイッチのばたつき〔1ms 前後〕より十分長い）。変えたら host_sim と avr_emu を回す
-4. **空気抵抗と転がり抵抗を測り、シミュレーションに入れる**（`--set cdA=... --set crr=...`）
-5. **ブレーカーを決め、動作特性曲線をシミュレーションに入れて、上りに流す電流を決める**（`optimizeBoost`）
-6. **ギア**：ダンロップの上りで止まっても再発進できるようにする。コントローラーの電流の上限が 35A なら 66T か 72T（タイムは 60T とほぼ同じ）、30A なら 78T（合計 約 8〜10 秒遅くなる：10A 全開 21:08、上りだけ 12A 20:44）、40A なら 60T のままでよい計算
+3. **空気抵抗と転がり抵抗を測り、シミュレーションに入れる**（`--set cdA=... --set crr=...`）
+4. **ブレーカーを決め、動作特性曲線をシミュレーションに入れて、上りに流す電流を決める**（`optimizeBoost`）
+5. **ギア**：ダンロップの上りで止まっても再発進できるようにする。コントローラーの電流の上限が 35A なら 66T か 72T（タイムは 60T とほぼ同じ）、30A なら 78T（合計 約 8〜10 秒遅くなる：10A 全開 21:08、上りだけ 12A 20:44）、40A なら 60T のままでよい計算
 
 ### そのあと
 
-7. **LCD にペース配分を出す**：`BUDGET_MAH` と `RACE_MIN` を足し、予算との差と残りに使える電流を出す（例 `PACE +85  NEED 7.2A`）。RAM の空きに注意
-8. **上りだけ電流を増やす走り方の手助け**：ブレーカーの熱の見積もりを LCD に出すなど
-9. **テレメトリー画面で電池の内部抵抗を出す**：加速のたびに電流と電圧が同時に変わる関係から計算する（ファームウェアは変えない）
-10. **CI の Node 20 の警告を消す**：actions/checkout・setup-node・cache などのバージョンを上げる
-11. **シミュレーションの改良**：アタックの間の電圧の回復、実際の可変界磁の特性、コントローラーの電流の上限、公式のセクター（区間 1〜4）ごとのタイム
-12. **ピットへの送信**：WiFi で車両の情報を受けるのは規則で認められている（第14条 4）。部品の追加が要る
-13. 最初に挙げた案の残り：ラップの記録（ボタンの短押し。ショートしても誤動作しない作りを崩さない）、INA228 の温度の記録
+6. **LCD にペース配分を出す**：`BUDGET_MAH` と `RACE_MIN` を足し、予算との差と残りに使える電流を出す（例 `PACE +85  NEED 7.2A`）。RAM の空きに注意
+7. **上りだけ電流を増やす走り方の手助け**：ブレーカーの熱の見積もりを LCD に出すなど
+8. **テレメトリー画面で電池の内部抵抗を出す**：加速のたびに電流と電圧が同時に変わる関係から計算する（ファームウェアは変えない）
+9. **シミュレーションの改良**：アタックの間の電圧の回復、実際の可変界磁の特性、コントローラーの電流の上限
+10. **ピットへの送信**：WiFi で車両の情報を受けるのは規則で認められている（第14条 4）。部品の追加が要る
+11. 最初に挙げた案の残り：ラップの記録（ボタンの短押し。ショートしても誤動作しない作りを崩さない）、INA228 の温度の記録
 
 ---
 

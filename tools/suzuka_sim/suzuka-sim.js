@@ -57,6 +57,15 @@
     [5460, 'ホームストレート'],
   ];
 
+  // 公式セクター (2026 KV-40 特別規則のコース図: 区間 1 = 1,658m、区間 2 = 936m、区間 3 = 2,130m、区間 4 = 1,084m。
+  // 4 つの合計は 5,808m なので、区間 4 の終点を 1 周 5,807m に合わせる)
+  const SECTORS = [
+    { id: 1, name: '区間1', from: 0,    to: 1658,  lengthM: 1658 },
+    { id: 2, name: '区間2', from: 1658, to: 2594,  lengthM: 936 },
+    { id: 3, name: '区間3', from: 2594, to: 4724,  lengthM: 2130 },
+    { id: 4, name: '区間4', from: 4724, to: LAP_M, lengthM: 1084 },
+  ];
+
   // カーブ: 図の Curve Radius の範囲 [m] と半径 [m]
   const CORNERS = [
     { from: 353, to: 454, r: 100, name: '1コーナー' },
@@ -198,6 +207,11 @@
     for (const [from, n] of SECTIONS) if (wrap(d) >= from) name = n;
     return name;
   }
+  function sectorAt(d) {
+    const m = wrap(d);
+    for (const s of SECTORS) if (m < s.to) return s.id;
+    return SECTORS[SECTORS.length - 1].id;
+  }
 
   // シケイン (R9.5 から R20 まで) の範囲
   const CHICANE = { from: 5095, to: 5167 };
@@ -264,7 +278,7 @@
   function simulate(params) {
     const p = Object.assign({}, DEFAULTS, params || {});
     const bat = battery(p);
-    const rec = { t: [], d: [], v: [], elev: [], i: [], volt: [], q: [], section: [], heat: [], im: [], field: [], attack: [], phase: [] };
+    const rec = { t: [], d: [], v: [], elev: [], i: [], volt: [], q: [], sector: [], section: [], heat: [], im: [], field: [], attack: [], phase: [] };
     let curAttack = 1, phase = '走行';
     const attacks = [], events = [], brakeBySection = {};
     const loss = { aero: 0, roll: 0, brake: 0, battery: 0, motor: 0, chain: 0, ctrl: 0, climb: 0 };
@@ -272,7 +286,7 @@
     const dt = p.dt;
     const record = (dAbs, v, i, volt, im, k) => {
       rec.t.push(+t.toFixed(3)); rec.d.push(dAbs); rec.v.push(v); rec.elev.push(elevationAt(dAbs));
-      rec.i.push(i); rec.volt.push(volt); rec.q.push(usedAh * 1000); rec.section.push(sectionAt(dAbs));
+      rec.i.push(i); rec.volt.push(volt); rec.q.push(usedAh * 1000); rec.sector.push(sectorAt(dAbs)); rec.section.push(sectionAt(dAbs));
       rec.heat.push(heat / p.breakerHeatS); rec.im.push(im); rec.field.push(k === undefined ? 1 : k); rec.attack.push(curAttack); rec.phase.push(phase);
     };
     const breakerStep = (i) => {
@@ -288,6 +302,8 @@
       curAttack = a + 1; phase = '走行';
       let d = 0, v = p.flyingStartKmh / 3.6, stuck = 0, peakA = 0, minV = Infinity;
       const t0 = t, q0 = usedAh;
+      const sectors = [];
+      let secIdx = 0, secT0 = t0, secQ0 = q0;
       while (d < LAP_M) {
         const grade = gradeAt(d);
         const fGrav = p.massKg * G * grade;
@@ -346,8 +362,21 @@
         } else {
           loss.motor += -pWheel * dt;                     // 惰性のときのモーターの引きずり
         }
+        const dPrev = d, tPrev = t, qPrev = usedAh;
         v = vNew; d += ds; t += dt;
         usedAh += i * dt / 3600;
+        while (secIdx < SECTORS.length && d >= SECTORS[secIdx].to) {
+          const sec = SECTORS[secIdx];
+          const frac = d > dPrev ? (sec.to - dPrev) / (d - dPrev) : 1;
+          const tCross = tPrev + (t - tPrev) * frac;
+          const qCross = qPrev + (usedAh - qPrev) * frac;
+          const timeS = tCross - secT0;
+          sectors.push({
+            id: sec.id, name: sec.name, startT: secT0, endT: tCross, timeS,
+            avgKmh: ((sec.to - sec.from) / timeS) * 3.6, mAh: (qCross - secQ0) * 1000,
+          });
+          secT0 = tCross; secQ0 = qCross; secIdx++;
+        }
         peakA = Math.max(peakA, i); minV = Math.min(minV, volt);
         record(a * LAP_M + d, v, i, volt, dr.im, dr.k);
         stuck = v < 0.3 && !tripped ? stuck + dt : 0;
@@ -355,7 +384,7 @@
       }
       attacks.push({
         attack: a + 1, finished: !dnf, startT: t0, lapS: t - t0, avgKmh: (Math.min(d, LAP_M) / (t - t0)) * 3.6,
-        mAh: (usedAh - q0) * 1000, peakA, minV,
+        mAh: (usedAh - q0) * 1000, peakA, minV, sectors,
       });
       if (dnf) break;
       // ゴール後: ブレーキで止まって待つ
@@ -473,14 +502,14 @@
   // Excel で日本語が化けないよう、先頭に BOM を付ける
   function toDetailCsv(result) {
     const r = result.rec;
-    const head = ['time_s', 'attack', 'phase', 'lap_distance_m', 'section', 'elevation_m', 'grade_pct', 'speed_kmh',
+    const head = ['time_s', 'attack', 'phase', 'lap_distance_m', 'sector', 'section', 'elevation_m', 'grade_pct', 'speed_kmh',
       'voltage_V', 'current_A', 'power_W', 'charge_mAh', 'motor_current_A', 'field_pct', 'breaker_heat_pct'];
     const out = ['\ufeff' + head.join(',')];
     for (let k = 0; k < r.t.length; k++) {
       const lapD = Math.max(0, Math.min(r.d[k] - (r.attack[k] - 1) * LAP_M, LAP_M));
       const running = r.phase[k] === '走行';
       out.push([
-        r.t[k].toFixed(3), r.attack[k], r.phase[k], lapD.toFixed(1), r.section[k], r.elev[k].toFixed(2),
+        r.t[k].toFixed(3), r.attack[k], r.phase[k], lapD.toFixed(1), running ? r.sector[k] : '', r.section[k], r.elev[k].toFixed(2),
         running ? (gradeAt(r.d[k]) * 100).toFixed(2) : '', (r.v[k] * 3.6).toFixed(2), r.volt[k].toFixed(3),
         r.i[k].toFixed(3), (r.volt[k] * r.i[k]).toFixed(2), r.q[k].toFixed(2), r.im[k].toFixed(2), (r.field[k] * 100).toFixed(0), (r.heat[k] * 100).toFixed(1),
       ].join(','));
@@ -489,7 +518,7 @@
   }
 
   return {
-    LAP_M, ELEVATION, SECTIONS, CORNERS, MOTOR, DEFAULTS, elevationAt, gradeAt, sectionAt, speedLimit, cornerKmh,
+    LAP_M, ELEVATION, SECTIONS, SECTORS, CORNERS, MOTOR, DEFAULTS, elevationAt, gradeAt, sectionAt, sectorAt, speedLimit, cornerKmh,
     motorAt24V, simulate, findCruise, forLapTime, maxCdAFor, optimizeBoost, strategies, odometer, toCsv, toDetailCsv,
   };
 });

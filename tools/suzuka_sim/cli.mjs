@@ -34,6 +34,7 @@ const p0 = Object.assign({}, S.DEFAULTS, base);
 //  走り方
 const SHARE = 0.95;   // 容量の 95% を使い切る目標 (残り 5% は個体差と見積もりの誤差のため)
 const mmss = (s) => { const t = Math.round(s); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+const mmss1 = (s) => { const t = Math.round(s * 10); const m = Math.floor(t / 600); const sec = (t % 600) / 10; return `${m}:${sec < 10 ? '0' : ''}${sec.toFixed(1)}`; };
 console.log('# 鈴鹿サーキット フルコース 5.807km × 3 回タイムアタックのシミュレーション\n');
 console.log(`車: ${p0.massKg}kg、Crr ${p0.crr}、CdA ${p0.cdA}m²、モーター ${S.MOTOR.name} (可変界磁 ${p0.fieldMin} まで)、ギア比 ${p0.gearRatio.toFixed(2)}、タイヤ外径 ${p0.tireDiameterM}m`);
 console.log(`電池: 単3 ${p0.series}直列×${p0.parallel}並列 (${p0.cellMah * p0.parallel}mAh、内部抵抗 ${p0.cellOhm * 1000}mΩ/本 → ${(p0.cellOhm * p0.series / p0.parallel).toFixed(2)}Ω)`);
@@ -46,6 +47,16 @@ for (const { st, r } of results) {
   const peak = Math.max(...r.attacks.map((a) => a.peakA)), minV = Math.min(...r.attacks.map((a) => a.minV));
   const total = r.dnf ? '完走できず' : mmss(r.totalLapS);
   console.log(`| ${st.name} | ${st.params.cruiseKmh.toFixed(1)} km/h | ${laps.join(' | ')} | ${total} | ${r.usedMah.toFixed(0)} mAh (${(r.usedMah / r.capacityMah * 100).toFixed(0)}%) | ${peak.toFixed(1)} A | ${minV.toFixed(1)} V | ${r.trips ? `${r.trips} 回切れた` : '切れない'} |`);
+}
+console.log('\n## 公式セクターごとのタイム (区間1: 1,658m / 区間2: 936m / 区間3: 2,130m / 区間4: 1,084m)\n');
+console.log('| 走り方 | 回 | 区間1 | 区間2 | 区間3 | 区間4 | 1周 |');
+console.log('|---|---|---|---|---|---|---|');
+for (const { st, r } of results) {
+  for (const a of r.attacks) {
+    const cols = [0, 1, 2, 3].map((k) => (a.sectors[k] ? mmss1(a.sectors[k].timeS) : '—'));
+    const lap = a.finished ? mmss1(a.lapS) : `途中で停止 (${r.dnf.section})`;
+    console.log(`| ${st.name} | ${a.attack}回目 | ${cols.join(' | ')} | ${lap} |`);
+  }
 }
 console.log('\n## エネルギーの行き先 (3 回分) [Wh]\n');
 console.log('| 走り方 | 空気抵抗 | 転がり抵抗 | ブレーキ | 電池の内部抵抗 | モーター | チェーン・コントローラー | 電池から出した合計 |');
