@@ -4,6 +4,8 @@ Ene-1 GP（電動カー競技）用の車載電力計。Arduino Nano で INA228 
 
 ## ハードウェア
 
+全体の配線図・電線の一覧・電源を入れる前の確かめ方は [docs/WIRING.md](docs/WIRING.md)。
+
 | 部品 | 内容 |
 |---|---|
 | マイコン | Arduino Nano（ATmega328P / 5V） |
