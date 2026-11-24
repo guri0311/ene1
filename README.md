@@ -2,6 +2,8 @@
 
 Ene-1 GP（電動カー競技）用の車載電力計。Arduino Nano で INA228 から電圧・電流・電力・積算 mAh を読み、車輪の速度センサーから速さと走った距離を数え、20×4 I2C 液晶に表示して microSD に CSV で記録する。
 
+ログを振り返るテレメトリー画面（[tools/log_viewer](tools/log_viewer)）と、鈴鹿サーキットの走行シミュレーション（[tools/suzuka_sim](tools/suzuka_sim)）も入っている。これまでの経緯・決めたこと・前提・未解決の質問・次の作業は [docs/HANDOVER.md](docs/HANDOVER.md) にまとめてある（作業を引き継ぐ人と AI エージェントはここから読む。エージェント向けの決まりは [AGENTS.md](AGENTS.md)）。
+
 ## ハードウェア
 
 全体の配線図・電線の一覧・電源を入れる前の確かめ方は [docs/WIRING.md](docs/WIRING.md)。
@@ -214,6 +216,12 @@ time_s,voltage_V,current_A,power_W,charge_mAh,speed_kmh,distance_m
 - 速度センサーに対応する前のスケッチの CSV（速さ・距離の列がない）も読める。その走行では速さのグラフと距離・電費を出さない
 - 「鈴鹿シミュ」で、下の鈴鹿サーキットのシミュレーションを走らせて表示する（速さ・標高・ブレーカーの熱のグラフ付き）。`index.html` と同じリポジトリの `tools/suzuka_sim/suzuka-sim.js` を読むので、フォルダの並びはそのままにしておく
 
+人に渡すときやスマホ・タブレットで開くときは、1 ファイルにまとめた配布版を作る（`logviewer-core.js` と `suzuka-sim.js` を中に入れる）。`tools/log_viewer/dist/` に `ene1-telemetry.html` と `使い方.txt` ができる（作り直せるので git には入れない）。
+
+```bash
+node tools/log_viewer/build-single.mjs
+```
+
 ### 鈴鹿サーキットのシミュレーション（tools/suzuka_sim）
 
 Ene-1 SUZUKA Challenge KV-40（フルコース 5.807km を止まった状態から 1 周 × 3 回、合計タイムで順位）を、車・電池・ブレーカー・ドライバーの物理モデルで走らせる。
@@ -233,6 +241,8 @@ node tools/suzuka_sim/cli.mjs --set cdA=0.04 --set massKg=65   # 車の値を変
 書き出す CSV は、走り方ごとに `LOG000.CSV`（電力計と同じ形。速さ・距離の列もあり、ログビューアで開ける）と `detail.csv`（速さ・区間・標高・勾配・モーター電流・ブレーカーの熱を足した表）。`LOG000.CSV` の距離は、電力計と同じく車輪が回った距離（速さの積分）で、ゴール後に止まるまでの分も含む。
 
 結果の目安（既定の値）：10A 全開で 6:52 / 7:00 / 7:08（合計 21:00、電池 89%）、上りだけ 12A（勾配 2% 以上で、ブレーカーの熱が 85% になるまで）で合計 20:34。電池より先にブレーカーで決まる力が壁になる。空気抵抗・転がり抵抗・重さで結果が大きく変わるので、実測した値を入れて使う。
+
+コースの標高は、大会資料の標高図を [digitize_elevation.py](tools/suzuka_sim/digitize_elevation.py) で読み取った値（コースの図が変わったら、同じやり方で作り直せる。使い方はスクリプトの先頭）。モデルの前提・感度・分かったことの詳細は [docs/HANDOVER.md](docs/HANDOVER.md)。
 
 ## ビルド
 

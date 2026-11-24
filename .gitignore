@@ -10,3 +10,9 @@ node_modules/
 
 # 鈴鹿シミュレーションが書き出す CSV (node tools/suzuka_sim/cli.mjs で作り直せる)
 tools/suzuka_sim/out/
+
+# ログビューアの配布用 1 ファイル版 (node tools/log_viewer/build-single.mjs で作り直せる)
+tools/log_viewer/dist/
+
+# Python のキャッシュ
+__pycache__/
