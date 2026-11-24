@@ -135,7 +135,11 @@
     motorMaxA: 30,         // コントローラーがモーターに流す電流の上限 [A] (発進の力を決める)
     maxDuty: 0.98,         // コントローラーが出せる電圧の割合
     fieldMin: 0.75,        // 可変界磁で弱められる下限 (特性図の界磁に対する割合。0.75 なら回転数は約 1.33 倍まで)
-    fieldLoss: 2.0,        // 界磁を弱めたときに増える銅損の割合 (弱めた分 x この値だけ銅損が増える。見積もり)
+    fieldLoss: 2.0,
+    // 惰性のとき (電流 0) もモーターがチェーンで回されると、鉄損と軸受けの摩擦がブレーキになる。
+    // 特性図の無負荷の損失 (24V・1780rpm で約 10W) から、モーター軸で約 0.054N·m の引きずりとする。
+    // ワンウェイクラッチで切り離すなら false。コギングは 1 回転で打ち消し合うので、平均の抵抗には入れない
+    motorDragWhenCoasting: true,        // 界磁を弱めたときに増える銅損の割合 (弱めた分 x この値だけ銅損が増える。見積もり)
     // 電池 (充電式単 3 x 40 本 = 20 本直列 x 2 並列、公称 24V)
     series: 20, parallel: 2,
     cellMah: 1900,         // 1 本の容量 [mAh] (エネループ スタンダードの最小容量)
@@ -260,16 +264,16 @@
   function simulate(params) {
     const p = Object.assign({}, DEFAULTS, params || {});
     const bat = battery(p);
-    const rec = { t: [], d: [], v: [], elev: [], i: [], volt: [], q: [], section: [], heat: [], im: [], attack: [], phase: [] };
+    const rec = { t: [], d: [], v: [], elev: [], i: [], volt: [], q: [], section: [], heat: [], im: [], field: [], attack: [], phase: [] };
     let curAttack = 1, phase = '走行';
     const attacks = [], events = [], brakeBySection = {};
     const loss = { aero: 0, roll: 0, brake: 0, battery: 0, motor: 0, chain: 0, ctrl: 0, climb: 0 };
     let t = 0, usedAh = 0, dnf = null, heat = 0, tripped = false, trips = 0;
     const dt = p.dt;
-    const record = (dAbs, v, i, volt, im) => {
+    const record = (dAbs, v, i, volt, im, k) => {
       rec.t.push(+t.toFixed(3)); rec.d.push(dAbs); rec.v.push(v); rec.elev.push(elevationAt(dAbs));
       rec.i.push(i); rec.volt.push(volt); rec.q.push(usedAh * 1000); rec.section.push(sectionAt(dAbs));
-      rec.heat.push(heat / p.breakerHeatS); rec.im.push(im); rec.attack.push(curAttack); rec.phase.push(phase);
+      rec.heat.push(heat / p.breakerHeatS); rec.im.push(im); rec.field.push(k === undefined ? 1 : k); rec.attack.push(curAttack); rec.phase.push(phase);
     };
     const breakerStep = (i) => {
       const x = (i / p.breakerA) ** 2 - 1;
@@ -317,8 +321,12 @@
         const boosting = p.boostA !== null && grade > p.boostGrade && heat < p.boostHeatMax * p.breakerHeatS;
         let capA = boosting ? Math.max(p.boostA, p.maxCurrentA) : p.maxCurrentA;
         if (p.downhillA !== null && grade < p.downhillGrade) capA = Math.min(capA, p.downhillA);
-        const dr = fWant > 0 ? drive(fWant, v, usedAh, bat, p, capA) : { force: 0, ib: 0, vb: bat.ocv(usedAh), im: 0 };
-        const fMotor = Math.min(dr.force, fWant);
+        const dr = fWant > 0 ? drive(fWant, v, usedAh, bat, p, capA) : { force: 0, ib: 0, vb: bat.ocv(usedAh), im: 0, k: 1 };
+        let fMotor = Math.min(dr.force, fWant);
+        // 電流を流していないときの、モーターの引きずり (惰性・ブレーキ中)
+        if (dr.ib <= 0 && p.motorDragWhenCoasting && v > 0.05) {
+          fMotor = -MOTOR.ke * MOTOR.iFric * p.gearRatio / (p.tireDiameterM / 2) / p.chainEff;
+        }
         const i = dr.ib, volt = dr.vb;
         const wasTripped = tripped;
         breakerStep(i);
@@ -332,12 +340,16 @@
         loss.battery += i * i * bat.R * dt;
         const pBat = volt * i, pMotorIn = pBat * p.ctrlEff, pWheel = fMotor * (v + vNew) / 2;
         loss.ctrl += (pBat - pMotorIn) * dt;
-        loss.chain += (pWheel / p.chainEff - pWheel) * dt;
-        loss.motor += Math.max(0, pMotorIn - pWheel / p.chainEff) * dt;
+        if (fMotor >= 0) {
+          loss.chain += (pWheel / p.chainEff - pWheel) * dt;
+          loss.motor += Math.max(0, pMotorIn - pWheel / p.chainEff) * dt;
+        } else {
+          loss.motor += -pWheel * dt;                     // 惰性のときのモーターの引きずり
+        }
         v = vNew; d += ds; t += dt;
         usedAh += i * dt / 3600;
         peakA = Math.max(peakA, i); minV = Math.min(minV, volt);
-        record(a * LAP_M + d, v, i, volt, dr.im);
+        record(a * LAP_M + d, v, i, volt, dr.im, dr.k);
         stuck = v < 0.3 && !tripped ? stuck + dt : 0;
         if (stuck > 20) { dnf = { attack: a + 1, d, section: sectionAt(d), reason: '電池の電圧が下がり、上りで止まった' }; break; }
       }
@@ -454,7 +466,7 @@
   function toDetailCsv(result) {
     const r = result.rec;
     const head = ['time_s', 'attack', 'phase', 'lap_distance_m', 'section', 'elevation_m', 'grade_pct', 'speed_kmh',
-      'voltage_V', 'current_A', 'power_W', 'charge_mAh', 'motor_current_A', 'breaker_heat_pct'];
+      'voltage_V', 'current_A', 'power_W', 'charge_mAh', 'motor_current_A', 'field_pct', 'breaker_heat_pct'];
     const out = ['\ufeff' + head.join(',')];
     for (let k = 0; k < r.t.length; k++) {
       const lapD = Math.max(0, Math.min(r.d[k] - (r.attack[k] - 1) * LAP_M, LAP_M));
@@ -462,7 +474,7 @@
       out.push([
         r.t[k].toFixed(3), r.attack[k], r.phase[k], lapD.toFixed(1), r.section[k], r.elev[k].toFixed(2),
         running ? (gradeAt(r.d[k]) * 100).toFixed(2) : '', (r.v[k] * 3.6).toFixed(2), r.volt[k].toFixed(3),
-        r.i[k].toFixed(3), (r.volt[k] * r.i[k]).toFixed(2), r.q[k].toFixed(2), r.im[k].toFixed(2), (r.heat[k] * 100).toFixed(1),
+        r.i[k].toFixed(3), (r.volt[k] * r.i[k]).toFixed(2), r.q[k].toFixed(2), r.im[k].toFixed(2), (r.field[k] * 100).toFixed(0), (r.heat[k] * 100).toFixed(1),
       ].join(','));
     }
     return out.join('\n') + '\n';
