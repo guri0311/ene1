@@ -1,0 +1,270 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 860" width="1240" height="860" font-family="'Hiragino Sans','Noto Sans JP','Yu Gothic',sans-serif">
+  <title>Ene1PowerMeter 配線図</title>
+  <style>
+    .bg { fill: #ffffff; }
+    .zone { fill: none; stroke: #8a949c; stroke-width: 1.5; stroke-dasharray: 7 5; }
+    .zlabel { font-size: 15px; font-weight: 700; fill: #47535c; }
+    .box { fill: #f4f6f8; stroke: #47535c; stroke-width: 1.5; rx: 6; }
+    .box2 { fill: #ffffff; stroke: #47535c; stroke-width: 1.5; }
+    .ttl { font-size: 15px; font-weight: 700; fill: #111a20; }
+    .sub { font-size: 12px; fill: #47535c; }
+    .pin { font-size: 12px; fill: #111a20; }
+    .note { font-size: 12px; fill: #47535c; }
+    .warn { font-size: 12px; fill: #b42323; font-weight: 700; }
+    .pw { fill: none; stroke: #d03b3b; stroke-width: 6; stroke-linejoin: round; }
+    .gw { fill: none; stroke: #111a20; stroke-width: 6; stroke-linejoin: round; }
+    .ps { fill: none; stroke: #d03b3b; stroke-width: 2; stroke-linejoin: round; }
+    .gs { fill: none; stroke: #111a20; stroke-width: 2; stroke-linejoin: round; }
+    .sda { fill: none; stroke: #2a78d6; stroke-width: 2; }
+    .scl { fill: none; stroke: #1baf7a; stroke-width: 2; }
+    .spi { fill: none; stroke: #eb6834; stroke-width: 2; }
+    .sig { fill: none; stroke: #6250d6; stroke-width: 2; }
+    .dot { fill: #111a20; }
+    .rdot { fill: #d03b3b; }
+    .conn { fill: #fff7d6; stroke: #47535c; stroke-width: 1.5; }
+    .ph { fill: none; stroke: #8a949c; stroke-width: 2; }
+  </style>
+  <rect class="bg" x="0" y="0" width="1240" height="860"/>
+
+  <!-- ===== 凡例 ===== -->
+  <g transform="translate(24,820)">
+    <line x1="0" y1="0" x2="34" y2="0" class="pw"/><text x="42" y="4" class="note">＋ 大電流 AWG14 以上</text>
+    <line x1="180" y1="0" x2="214" y2="0" class="gw"/><text x="222" y="4" class="note">− 大電流 AWG14 以上</text>
+    <line x1="360" y1="0" x2="394" y2="0" class="ps"/><text x="402" y="4" class="note">5V・測定 (細線)</text>
+    <line x1="510" y1="0" x2="544" y2="0" class="gs"/><text x="552" y="4" class="note">GND (細線)</text>
+    <line x1="630" y1="0" x2="664" y2="0" class="sda"/><text x="672" y="4" class="note">SDA</text>
+    <line x1="710" y1="0" x2="744" y2="0" class="scl"/><text x="752" y="4" class="note">SCL</text>
+    <line x1="790" y1="0" x2="824" y2="0" class="spi"/><text x="832" y="4" class="note">SPI</text>
+    <line x1="870" y1="0" x2="904" y2="0" class="sig"/><text x="912" y="4" class="note">ボタン・速度センサー</text>
+    <circle cx="1060" cy="0" r="5" class="conn"/><text x="1070" y="4" class="note">D-5200 コネクタ</text>
+  </g>
+
+  <!-- ===== 電池ケース ===== -->
+  <rect class="zone" x="16" y="40" width="210" height="250"/>
+  <text class="zlabel" x="24" y="32">電池ケース（ブレーカーごと外す）</text>
+  <rect class="box" x="34" y="56" width="172" height="96"/>
+  <text class="ttl" x="46" y="80">駆動用電池</text>
+  <text class="sub" x="46" y="100">単3 × 40 本</text>
+  <text class="sub" x="46" y="117">20 直列 × 2 並列</text>
+  <text class="sub" x="46" y="134">公称 24V / 3800mAh</text>
+  <text class="pin" x="186" y="78" text-anchor="end">＋</text>
+  <text class="pin" x="186" y="140" text-anchor="end">−</text>
+  <rect class="box2" x="66" y="176" width="120" height="44" rx="4"/>
+  <text class="ttl" x="126" y="196" text-anchor="middle">ブレーカー</text>
+  <text class="sub" x="126" y="213" text-anchor="middle">10A 熱動式</text>
+  <text class="note" x="30" y="248">カバー付き（第13条5）</text>
+  <text class="note" x="30" y="266">工具なしで外せる（第7条3）</text>
+  <!-- 電池＋ → ブレーカー → J1-1 -->
+  <polyline class="pw" points="206,74 222,74 222,160 126,160 126,176"/>
+  <polyline class="pw" points="126,220 126,232 244,232 244,96 262,96"/>
+  <!-- 電池− → J1-2 -->
+  <polyline class="gw" points="206,140 214,140 214,150 252,150 252,140 262,140"/>
+
+  <!-- ===== コネクタ J1/P1 ===== -->
+  <rect class="conn" x="262" y="80" width="34" height="76" rx="3"/>
+  <text class="pin" x="279" y="100" text-anchor="middle">1</text><text class="pin" x="279" y="144" text-anchor="middle">2</text>
+  <rect class="conn" x="298" y="80" width="34" height="76" rx="3"/>
+  <text class="pin" x="315" y="100" text-anchor="middle">1</text><text class="pin" x="315" y="144" text-anchor="middle">2</text>
+  <text class="note" x="262" y="174">J1 メス</text><text class="note" x="300" y="190">P1 オス</text>
+
+  <!-- ===== 電力計 ===== -->
+  <rect class="zone" x="344" y="40" width="470" height="760"/>
+  <text class="zlabel" x="352" y="32">電力計（Ene1PowerMeter）</text>
+
+  <!-- INA228 -->
+  <rect class="box" x="420" y="58" width="300" height="150"/>
+  <text class="ttl" x="432" y="80">INA228 モジュール #11228</text>
+  <text class="sub" x="432" y="97">I2C 0x40（A0・A1 を G にはんだ）</text>
+  <text class="pin" x="428" y="124">ISENSE+</text>
+  <text class="pin" x="712" y="124" text-anchor="end">ISENSE−</text>
+  <!-- シャント -->
+  <rect x="530" y="112" width="80" height="18" fill="#ffffff" stroke="#47535c" stroke-width="1.5"/>
+  <text class="sub" x="570" y="125" text-anchor="middle">2mΩ</text>
+  <line x1="490" y1="121" x2="530" y2="121" stroke="#d03b3b" stroke-width="3"/>
+  <line x1="610" y1="121" x2="650" y2="121" stroke="#d03b3b" stroke-width="3"/>
+  <!-- 下側の端子 -->
+  <text class="pin" x="440" y="196" text-anchor="middle">V+</text>
+  <text class="pin" x="490" y="196" text-anchor="middle">V−</text>
+  <text class="pin" x="560" y="196" text-anchor="middle">VS</text>
+  <text class="pin" x="605" y="196" text-anchor="middle">GND</text>
+  <text class="pin" x="650" y="196" text-anchor="middle">SDA</text>
+  <text class="pin" x="695" y="196" text-anchor="middle">SCL</text>
+  <!-- P1-1 → ISENSE+（太） -->
+  <polyline class="pw" points="332,96 400,96 400,121 420,121"/>
+  <!-- ISENSE− → P2-1（太） -->
+  <polyline class="pw" points="720,121 790,121 790,96 836,96"/>
+  <!-- −の素通し P1-2 → P2-2（太） -->
+  <polyline class="gw" points="332,140 380,140 380,250 800,250 800,140 836,140"/>
+  <!-- 1 点アース S -->
+  <circle cx="380" cy="250" r="7" class="dot"/>
+  <text class="ttl" x="356" y="276">S</text>
+  <text class="note" x="392" y="278">1 点アース（ここから細線で分ける）</text>
+  <!-- V+ ← P1-1（細） -->
+  <circle cx="400" cy="96" r="5" class="rdot"/>
+  <polyline class="ps" points="400,96 400,62 410,62 410,226 440,226 440,204"/>
+  <!-- V− ← S（細） -->
+  <polyline class="gs" points="380,250 380,236 490,236 490,204"/>
+
+  <!-- ===== Nano ===== -->
+  <rect class="box" x="400" y="380" width="170" height="330"/>
+  <text class="ttl" x="412" y="404">Arduino Nano</text>
+  <text class="sub" x="412" y="421">ATmega328P / 5V</text>
+  <g class="pin">
+    <text x="562" y="450" text-anchor="end">5V</text>
+    <text x="562" y="478" text-anchor="end">GND</text>
+    <text x="562" y="506" text-anchor="end">A4 (SDA)</text>
+    <text x="562" y="534" text-anchor="end">A5 (SCL)</text>
+    <text x="562" y="562" text-anchor="end">D10 (CS)</text>
+    <text x="562" y="590" text-anchor="end">D11 (MOSI)</text>
+    <text x="562" y="618" text-anchor="end">D12 (MISO)</text>
+    <text x="562" y="646" text-anchor="end">D13 (SCK)</text>
+    <text x="562" y="674" text-anchor="end">D2 (ボタン)</text>
+    <text x="562" y="702" text-anchor="end">D3 (速度)</text>
+    <text x="410" y="560">USB</text>
+  </g>
+
+  <!-- 縦の母線 (Nano の右) -->
+  <!-- 5V 母線 -->
+  <polyline class="ps" points="570,446 600,446 600,300"/>
+  <!-- GND 母線 -->
+  <polyline class="gs" points="570,474 612,474 612,300"/>
+  <!-- SDA / SCL -->
+  <polyline class="sda" points="570,502 624,502 624,300"/>
+  <polyline class="scl" points="570,530 636,530 636,300"/>
+  <!-- 母線の上端: INA228 へ -->
+  <polyline class="ps" points="600,300 560,300 560,204"/>
+  <polyline class="gs" points="612,300 612,214 605,214 605,204"/>
+  <polyline class="sda" points="624,300 650,300 650,204"/>
+  <polyline class="scl" points="636,300 636,290 695,290 695,204"/>
+  <!-- Nano GND ← S（細、1 本） -->
+  <polyline class="gs" points="380,250 380,474 400,474"/>
+  <text class="note" x="388" y="352">S → Nano GND（細線 1 本）</text>
+
+  <!-- プルアップ -->
+  <rect class="box2" x="650" y="318" width="150" height="58" rx="4"/>
+  <text class="sub" x="660" y="338">R1 4.7kΩ SDA–5V</text>
+  <text class="sub" x="660" y="354">R2 4.7kΩ SCL–5V</text>
+  <text class="sub" x="660" y="370">（Nano の近くに）</text>
+
+  <!-- LCD -->
+  <rect class="box" x="650" y="394" width="150" height="128"/>
+  <text class="ttl" x="660" y="414">LCD 20×4</text>
+  <text class="sub" x="660" y="430">ACM2004D (I2C 0x3C)</text>
+  <g class="pin">
+    <text x="660" y="450">VDD → 5V</text>
+    <text x="660" y="466">VSS → GND</text>
+    <text x="660" y="482">SDA / SCL</text>
+    <text x="660" y="498">BL+ (6) → 5V</text>
+    <text x="660" y="514">BL− (7) → GND</text>
+  </g>
+  <line x1="600" y1="446" x2="650" y2="446" class="ps"/><circle cx="600" cy="446" r="3.5" class="rdot"/>
+  <line x1="612" y1="462" x2="650" y2="462" class="gs"/><circle cx="612" cy="462" r="3.5" class="dot"/>
+  <line x1="624" y1="478" x2="650" y2="478" class="sda"/>
+  <line x1="636" y1="486" x2="650" y2="486" class="scl"/>
+
+  <!-- SD -->
+  <rect class="box" x="650" y="540" width="150" height="120"/>
+  <text class="ttl" x="660" y="560">microSD モジュール</text>
+  <g class="pin">
+    <text x="660" y="580">VCC → 5V / GND</text>
+    <text x="660" y="598">CS ← D10</text>
+    <text x="660" y="614">MOSI ← D11</text>
+    <text x="660" y="630">MISO → D12</text>
+    <text x="660" y="646">SCK ← D13</text>
+  </g>
+  <polyline class="spi" points="570,558 590,558 590,594 650,594"/>
+  <polyline class="spi" points="570,586 586,586 586,610 650,610"/>
+  <polyline class="spi" points="570,614 582,614 582,626 650,626"/>
+  <polyline class="spi" points="570,642 650,642"/>
+  <line x1="600" y1="576" x2="650" y2="576" class="ps"/>
+  <line x1="612" y1="584" x2="650" y2="584" class="gs"/>
+  <line x1="612" y1="706" x2="650" y2="706" class="gs"/>
+
+  <!-- ボタン -->
+  <rect class="box2" x="650" y="676" width="150" height="40" rx="4"/>
+  <text class="sub" x="660" y="694">リセットボタン</text>
+  <text class="sub" x="660" y="709">D2 ↔ GND</text>
+  <polyline class="sig" points="570,670 650,686"/>
+
+  <!-- D3 フィルター -->
+  <rect class="box2" x="650" y="728" width="150" height="58" rx="4"/>
+  <text class="sub" x="660" y="746">R3 4.7kΩ D3–5V</text>
+  <text class="sub" x="660" y="762">C1 10nF D3–GND</text>
+  <text class="sub" x="660" y="778">（Nano の近くに）</text>
+  <polyline class="sig" points="570,698 620,698 620,756 650,756"/>
+
+  <!-- ===== 計器用の別電源 ===== -->
+  <rect class="zone" x="16" y="500" width="300" height="150"/>
+  <text class="zlabel" x="24" y="492">計器用の別電源（第10条）</text>
+  <rect class="box" x="34" y="520" width="190" height="70"/>
+  <text class="ttl" x="46" y="544">USB モバイルバッテリー</text>
+  <text class="sub" x="46" y="562">5V（駆動用電池とは別）</text>
+  <text class="sub" x="46" y="579">VIN に 7〜12V でもよい</text>
+  <polyline class="ps" points="224,556 400,556"/>
+  <text class="note" x="250" y="548">USB ケーブル</text>
+  <text class="note" x="30" y="614">駆動用電池からは計器の電気を取らない。</text>
+  <text class="note" x="30" y="632">つながるのは測定の線（シャント・V+・GND）だけ</text>
+
+  <!-- ===== コネクタ P2/J2 ===== -->
+  <rect class="conn" x="836" y="80" width="34" height="76" rx="3"/>
+  <text class="pin" x="853" y="100" text-anchor="middle">1</text><text class="pin" x="853" y="144" text-anchor="middle">2</text>
+  <rect class="conn" x="872" y="80" width="34" height="76" rx="3"/>
+  <text class="pin" x="889" y="100" text-anchor="middle">1</text><text class="pin" x="889" y="144" text-anchor="middle">2</text>
+  <text class="note" x="822" y="174">P2 メス</text><text class="note" x="870" y="190">J2 オス</text>
+
+  <!-- メインスイッチ -->
+  <rect class="box2" x="930" y="62" width="104" height="58" rx="4"/>
+  <text class="ttl" x="982" y="84" text-anchor="middle">メイン</text>
+  <text class="ttl" x="982" y="102" text-anchor="middle">スイッチ</text>
+  <text class="sub" x="982" y="116" text-anchor="middle">第13条8</text>
+  <polyline class="pw" points="906,96 930,96"/>
+
+  <!-- コントローラー -->
+  <rect class="zone" x="1050" y="40" width="176" height="420"/>
+  <text class="zlabel" x="1058" y="32">駆動系</text>
+  <rect class="box" x="1064" y="58" width="148" height="130"/>
+  <text class="ttl" x="1074" y="80">モーター</text>
+  <text class="ttl" x="1074" y="98">コントローラー</text>
+  <text class="pin" x="1074" y="124">＋</text>
+  <text class="pin" x="1074" y="160">−</text>
+  <text class="sub" x="1100" y="124">← スイッチ</text>
+  <text class="sub" x="1100" y="160">← J2-2</text>
+  <text class="sub" x="1074" y="180">アクセル入力</text>
+  <polyline class="pw" points="1034,96 1048,96 1048,120 1064,120"/>
+  <polyline class="gw" points="906,140 1040,140 1040,156 1064,156"/>
+  <!-- モーター -->
+  <rect class="box" x="1064" y="250" width="148" height="110"/>
+  <text class="ttl" x="1074" y="272">モーター</text>
+  <text class="sub" x="1074" y="290">MITSUBA M1048 24V</text>
+  <text class="sub" x="1074" y="307">自動進角・可変界磁</text>
+  <text class="sub" x="1074" y="324">25T → 60T チェーン</text>
+  <text class="sub" x="1074" y="341">U・V・W とホール線</text>
+  <line x1="1110" y1="188" x2="1110" y2="250" class="ph"/>
+  <line x1="1138" y1="188" x2="1138" y2="250" class="ph"/>
+  <line x1="1166" y1="188" x2="1166" y2="250" class="ph"/>
+  <text class="note" x="1064" y="384">メーカーの指示どおり</text>
+  <text class="note" x="1064" y="402">（この図の範囲外）</text>
+
+  <!-- ===== 速度センサー ===== -->
+  <rect class="zone" x="840" y="560" width="384" height="180"/>
+  <text class="zlabel" x="848" y="552">車輪（速度センサー）</text>
+  <rect class="box" x="858" y="578" width="196" height="110"/>
+  <text class="ttl" x="870" y="600">ホール IC</text>
+  <text class="sub" x="870" y="617">DRV5033 など（オープンドレイン）</text>
+  <g class="pin">
+    <text x="870" y="638">VCC ← 5V</text>
+    <text x="870" y="656">GND ← GND</text>
+    <text x="870" y="674">OUT → D3</text>
+  </g>
+  <text class="sub" x="960" y="638">C2 0.1µF</text>
+  <text class="sub" x="960" y="652">（センサー際）</text>
+  <circle cx="1140" cy="634" r="44" fill="none" stroke="#47535c" stroke-width="2"/>
+  <circle cx="1140" cy="634" r="6" fill="#47535c"/>
+  <rect x="1132" y="586" width="16" height="10" fill="#d03b3b"/>
+  <text class="sub" x="1214" y="704" text-anchor="end">磁石 1 個（すき間 2〜5mm）</text>
+  <text class="note" x="858" y="726">3 本はより線（できればシールド）、モーター線から離す</text>
+  <!-- 速度センサーへの 3 本 (下を回す) -->
+  <polyline class="ps" points="600,576 600,794 826,794 826,634 858,634"/>
+  <polyline class="gs" points="612,474 612,788 834,788 834,652 858,652"/>
+  <polyline class="sig" points="800,756 842,756 842,670 858,670"/>
+</svg>
