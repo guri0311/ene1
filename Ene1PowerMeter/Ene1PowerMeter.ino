@@ -90,7 +90,7 @@ constexpr float    WHEEL_CIRCUMFERENCE_M = 1.571f;
 // 速さは車輪 1 周ぶんのパルスの間隔から出すので、磁石の間隔がそろっていなくても誤差にならない
 constexpr uint8_t  SPEED_MAGNETS   = 1;
 // これより速くなるパルスは、チャタリング・ノイズとして捨てる [km/h]。実際の最高速より十分大きくする
-constexpr float    SPEED_MAX_KMH   = 90.0f;
+constexpr float    SPEED_MAX_KMH   = 110.0f;
 // これより遅くなったら 0km/h と表示する [km/h]。パルスが来なくなってから 0 にするまでの時間がこれで決まる
 // (初期値では 1.9 秒)
 constexpr float    SPEED_MIN_KMH   = 3.0f;
